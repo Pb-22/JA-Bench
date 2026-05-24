@@ -243,5 +243,12 @@ Important restart facts:
 - keep Shodan optional, with silent skip if the key is absent
 - do not add VirusTotal at this stage
 - do not try to solve VPN/region shifting inside the container; document host-managed VPN as an operator tip instead
+- the project is now pushed to `https://github.com/Pb-22/JA-Bench` and `git@github.com:Pb-22/JA-Bench.git`
+- default UI port is now `7008` on the host and `5000` in the container
+- the README was rewritten for a fresh customer-style run and was validated from a clean copied checkout with no `config/keys.env`
+- important compose/runtime detail: `docker-compose.yml` must not hard-require `config/keys.env`; the app should still boot cleanly with Shodan disabled
+- fresh-run validation already proved: `docker compose up -d --build` works, the UI comes up on `http://localhost:7008`, upload works, and HTTP comparison reaches `match` on the Cloudflare URI sample after active probes
+- one GitHub note to remember: HTTPS anonymous clone prompted for credentials because the repo was behaving as non-public at that moment; SSH clone worked immediately
+- no later product/design changes were made during environment-maintenance work after this handoff, so resume from the clean-run validated state above unless newer JA-Bench commits say otherwise
 
-If resuming after a break, read the design notes before writing UI code or README text.
+If resuming after a break, read the design notes before writing UI code or README text. If checking release/readiness, read `README.md` next because it now reflects the customer-facing setup path.

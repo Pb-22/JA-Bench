@@ -5,7 +5,7 @@ from typing import Any
 
 from .reference_service import search_reference_fingerprints
 
-SEARCH_TYPES = ['auto', 'ja3', 'ja3s', 'ja4', 'jarm', 'sni', 'cert_hash', 'ip']
+SEARCH_TYPES = ['auto', 'ja3', 'ja3s', 'ja4', 'ja4s', 'ja4h', 'jarm', 'hassh', 'sni', 'cert_hash', 'ip']
 
 
 def local_search(conn: sqlite3.Connection, value: str, search_type: str = 'auto', limit: int = 50) -> dict[str, Any]:
@@ -18,8 +18,8 @@ def local_search(conn: sqlite3.Connection, value: str, search_type: str = 'auto'
     bounded_limit = max(1, min(limit, 200))
 
     matches: list[dict[str, Any]] = []
-    if normalized_type in {'auto', 'ja3', 'ja3s', 'ja4', 'jarm'}:
-        fp_types = [normalized_type] if normalized_type != 'auto' else ['ja3', 'ja3s', 'ja4', 'jarm']
+    if normalized_type in {'auto', 'ja3', 'ja3s', 'ja4', 'ja4s', 'ja4h', 'jarm', 'hassh'}:
+        fp_types = [normalized_type] if normalized_type != 'auto' else ['ja3', 'ja3s', 'ja4', 'ja4s', 'ja4h', 'jarm', 'hassh']
         matches.extend(_fingerprint_matches(conn, search_value, fp_types, bounded_limit))
     if normalized_type in {'auto', 'sni'}:
         matches.extend(_sni_matches(conn, search_value, bounded_limit))
@@ -27,11 +27,15 @@ def local_search(conn: sqlite3.Connection, value: str, search_type: str = 'auto'
         matches.extend(_cert_matches(conn, search_value, bounded_limit))
     if normalized_type in {'auto', 'ip'}:
         matches.extend(_ip_matches(conn, search_value, bounded_limit))
-    if normalized_type in {'auto', 'ja4'}:
-        for row in search_reference_fingerprints(conn, fingerprint_value=search_value, fingerprint_type='ja4', limit=bounded_limit):
+    if normalized_type in {'auto', 'ja4', 'ja4s', 'ja4h'}:
+        reference_type = 'ja4' if normalized_type == 'auto' else normalized_type
+        for row in search_reference_fingerprints(conn, fingerprint_value=search_value, fingerprint_type=reference_type, limit=bounded_limit):
             matches.append({
-                'match_type': 'reference_ja4',
-                'title': row['fingerprint_value'],
+                'match_type': f'reference_{reference_type}',
+                'title': (
+                    row.get('fingerprint_value') if reference_type == 'ja4'
+                    else row.get(f'{reference_type}_fingerprint')
+                ) or search_value,
                 'subtitle': row.get('application') or row.get('os_name') or 'historical reference',
                 'detail': row,
                 'provenance': 'reference_historical',

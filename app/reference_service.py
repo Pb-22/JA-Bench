@@ -11,6 +11,7 @@ def search_reference_fingerprints(
     limit: int = 50,
 ) -> list[dict[str, Any]]:
     bounded_limit = max(1, min(limit, 200))
+    normalized_type = (fingerprint_type or "").strip().lower() or None
     params: list[Any] = [fingerprint_value]
     sql = """
         SELECT
@@ -34,11 +35,21 @@ def search_reference_fingerprints(
             rf.confidence_note
         FROM reference_fingerprints rf
         JOIN reference_datasets rd ON rd.id = rf.dataset_id
-        WHERE rf.fingerprint_value = ?
+        WHERE {where_clause} = ?
     """
-    if fingerprint_type:
+    where_clause = "rf.fingerprint_value"
+    if normalized_type == "ja4s":
+        where_clause = "rf.ja4s_fingerprint"
+    elif normalized_type == "ja4h":
+        where_clause = "rf.ja4h_fingerprint"
+    elif normalized_type == "ja4x":
+        where_clause = "rf.ja4x_fingerprint"
+    elif normalized_type == "ja4t":
+        where_clause = "rf.ja4t_fingerprint"
+    sql = sql.format(where_clause=where_clause)
+    if normalized_type and normalized_type not in {"ja4s", "ja4h", "ja4x", "ja4t"}:
         sql += " AND rf.fingerprint_type = ?"
-        params.append(fingerprint_type)
+        params.append(normalized_type)
     sql += " ORDER BY rf.application IS NULL, rf.application, rf.os_name, rf.device_name LIMIT ?"
     params.append(bounded_limit)
     rows = conn.execute(sql, params).fetchall()

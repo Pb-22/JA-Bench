@@ -369,7 +369,7 @@ a { color: var(--accent); }
   margin-top: 12px;
 }
 
-.mode-row {
+.mode-row, .search-row {
   flex-wrap: wrap;
 }
 
@@ -436,6 +436,14 @@ button[disabled], input[readonly], select[disabled] {
 
 .empty-box {
   min-height: 96px;
+}
+
+details.panel > summary {
+  list-style: none;
+}
+
+details.panel > summary::-webkit-details-marker {
+  display: none;
 }
 
 .mono {
@@ -533,6 +541,82 @@ button[disabled], input[readonly], select[disabled] {
 
 .kv-value {
   word-break: break-word;
+}
+
+.artifact-console-section {
+  background: color-mix(in srgb, var(--accent) 6%, var(--surface-code) 94%);
+}
+
+.artifact-console {
+  margin-top: 10px;
+  border: 1px solid var(--border-soft);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--surface-code) 92%, black 8%);
+  padding: 10px 12px;
+  display: grid;
+  gap: 8px;
+}
+
+.artifact-row {
+  display: grid;
+  grid-template-columns: minmax(160px, 240px) minmax(0, 1fr);
+  gap: 12px;
+  align-items: start;
+  border-bottom: 1px solid color-mix(in srgb, var(--border-soft) 65%, transparent 35%);
+  padding-bottom: 8px;
+}
+
+.artifact-row:last-child {
+  border-bottom: 0;
+  padding-bottom: 0;
+}
+
+.artifact-key {
+  color: var(--muted);
+  text-transform: uppercase;
+  font-size: 0.8rem;
+  letter-spacing: 0.05em;
+}
+
+.artifact-value {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.comparison-columns {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+  margin-top: 10px;
+}
+
+.comparison-shape {
+  margin-top: 6px;
+  overflow-wrap: anywhere;
+}
+
+.detail-list {
+  display: grid;
+  gap: 6px;
+}
+
+.detail-row {
+  display: grid;
+  grid-template-columns: minmax(120px, 180px) minmax(0, 1fr);
+  gap: 12px;
+  align-items: start;
+}
+
+.detail-key {
+  color: var(--muted);
+  text-transform: uppercase;
+  font-size: 0.78rem;
+  letter-spacing: 0.05em;
+}
+
+.detail-value {
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 .diff-list {
@@ -673,5 +757,11 @@ summary {
 
   .hero-meta {
     text-align: left;
+  }
+
+  .artifact-row,
+  .detail-row,
+  .comparison-columns {
+    grid-template-columns: 1fr;
   }
 }

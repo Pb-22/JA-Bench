@@ -141,9 +141,9 @@ def build_http_comparison_summary(http_rows: list[dict[str, Any]]) -> dict[str, 
         'light': [row for row in http_rows if row.get('provenance') == 'light_active_probe'],
         'mimic': [row for row in http_rows if row.get('provenance') == 'pcap_mimic_active'],
     }
-    passive = buckets['passive'][0] if buckets['passive'] else None
-    light = buckets['light'][-1] if buckets['light'] else None
-    mimic = buckets['mimic'][-1] if buckets['mimic'] else None
+    passive = _merge_http_rows(buckets['passive'])
+    light = _merge_http_rows(buckets['light'])
+    mimic = _merge_http_rows(buckets['mimic'])
     return {
         'passive': _http_row_snapshot(passive),
         'light': _http_row_snapshot(light),
@@ -157,6 +157,7 @@ def _http_row_snapshot(row: dict[str, Any] | None) -> dict[str, Any] | None:
     if not row:
         return None
     response_body = _safe_json(row.get('response_body_summary_json'))
+    response_headers = _safe_json(row.get('response_headers_json'))
     return {
         'id': row.get('id'),
         'provenance': row.get('provenance'),
@@ -168,7 +169,7 @@ def _http_row_snapshot(row: dict[str, Any] | None) -> dict[str, Any] | None:
         'status_code': row.get('status_code'),
         'location_header': row.get('location_header'),
         'user_agent': row.get('user_agent'),
-        'content_type': _safe_json(row.get('response_headers_json')).get('content-type') or _safe_json(row.get('response_headers_json')).get('Content-Type'),
+        'content_type': response_headers.get('content-type') or response_headers.get('Content-Type'),
         'body_preview_utf8': response_body.get('body_preview_utf8'),
         'body_size_captured': response_body.get('body_size_captured'),
         'observed_at': row.get('observed_at'),
@@ -224,3 +225,34 @@ def _safe_json(value: Any) -> dict[str, Any]:
     except (TypeError, json.JSONDecodeError):
         return {}
     return loaded if isinstance(loaded, dict) else {}
+
+
+def _merge_http_rows(rows: list[dict[str, Any]]) -> dict[str, Any] | None:
+    if not rows:
+        return None
+    merged = dict(rows[0])
+    request_headers: dict[str, Any] = {}
+    response_headers: dict[str, Any] = {}
+    body_summary: dict[str, Any] = {}
+    for row in rows:
+        for field in (
+            'request_method',
+            'host',
+            'uri',
+            'full_url',
+            'query_string',
+            'user_agent',
+            'referer',
+            'status_code',
+            'location_header',
+            'observed_at',
+        ):
+            if not merged.get(field) and row.get(field):
+                merged[field] = row.get(field)
+        request_headers.update(_safe_json(row.get('request_headers_json')))
+        response_headers.update(_safe_json(row.get('response_headers_json')))
+        body_summary.update(_safe_json(row.get('response_body_summary_json')))
+    merged['request_headers_json'] = json.dumps(request_headers) if request_headers else None
+    merged['response_headers_json'] = json.dumps(response_headers) if response_headers else None
+    merged['response_body_summary_json'] = json.dumps(body_summary) if body_summary else None
+    return merged

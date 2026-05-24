@@ -40,47 +40,50 @@
       </section>
 
       <section class="panel">
-        <h2>Mode + Quick Search</h2>
+        <h2>Mode</h2>
         <div class="status-chip">Passive-first, container-backed, copy-friendly</div>
         <div class="mode-row">
-          <label><input type="radio" checked disabled> Passive</label>
-          <label><input type="radio" disabled> Light Testing</label>
-          <label><input type="radio" disabled> PCAP-Mimic</label>
+          <label><input type="radio" name="view-mode" value="passive" checked> Passive</label>
+          <label><input type="radio" name="view-mode" value="light"> Light Testing</label>
+          <label><input type="radio" name="view-mode" value="mimic"> PCAP-Mimic</label>
         </div>
-        <div class="search-row">
-          <input id="quick-search-value" type="text" value="" placeholder="JA3, JA3S, JA4, JARM, SNI, cert hash, or IP">
-          <select id="quick-search-type" aria-label="Quick search type">
-            <option value="auto" selected>auto</option>
-            <option value="ja3">ja3</option>
-            <option value="ja3s">ja3s</option>
-            <option value="ja4">ja4</option>
-            <option value="jarm">jarm</option>
-            <option value="sni">sni</option>
-            <option value="cert_hash">cert hash</option>
-            <option value="ip">ip</option>
-          </select>
-          <button id="quick-search-button" type="button">Search</button>
-        </div>
+        <p class="compact-note">Mode changes the main output focus. Passive keeps the view wire-first, while Light Testing and PCAP-Mimic surface the bounded follow-up artifacts for the selected flow.</p>
       </section>
     </section>
 
     <section class="panel-grid main-grid">
       <section class="panel output-panel">
         <h2>Main Output</h2>
-        <div id="main-output" class="output-box">JA-Bench is ready.<br><br>Upload a PCAP to:<br>- hash and deduplicate it<br>- parse flows<br>- populate the conversation selector<br>- extract first-pass HTTP/TLS observations<br>- store initial fingerprint values</div>
+        <div id="main-output" class="output-box">JA-Bench is ready.<br><br>Upload a PCAP to:<br>- hash and deduplicate it<br>- parse flows<br>- populate the conversation selector<br>- extract passive HTTP, TLS, cert, and SSH artifacts<br>- derive and store JA-family and related fingerprint values</div>
       </section>
 
       <section class="right-column">
         <section class="panel">
-          <h2>Matches</h2>
+          <div class="panel-title-row">
+            <h2>Actions</h2>
+          </div>
+          <div class="panel-actions">
+            <button id="light-jarm-button" type="button">Run Light JARM</button>
+            <button id="light-cert-button" type="button">Grab TLS Cert</button>
+            <button id="light-http-button" type="button">HTTP Metadata</button>
+            <button id="pcap-mimic-button" type="button">Run PCAP-Mimic</button>
+            <button id="shodan-enrich-button" type="button">Run Shodan Enrichment</button>
+          </div>
+          <p class="compact-note">Every active action runs inside the container and writes labeled artifacts back into the selected flow.</p>
+        </section>
+        <details id="matches-panel" class="panel">
+          <summary>Matches</summary>
           <div class="search-row">
-            <input id="reference-search-value" type="text" value="t13d1517h2_8daaf6152771_b0da82dd1658" aria-label="Reference fingerprint search value">
+            <input id="reference-search-value" type="text" value="" placeholder="Lookup JA3, JA3S, JA4, JA4H, JA4S, JARM, HASSH, SNI, cert hash, or IP" aria-label="Reference fingerprint search value">
             <select id="reference-search-type" aria-label="Reference fingerprint search type">
-              <option value="auto">auto</option>
+              <option value="auto" selected>auto</option>
               <option value="ja3">ja3</option>
               <option value="ja3s">ja3s</option>
-              <option value="ja4" selected>ja4</option>
+              <option value="ja4">ja4</option>
+              <option value="ja4s">ja4s</option>
+              <option value="ja4h">ja4h</option>
               <option value="jarm">jarm</option>
+              <option value="hassh">hassh</option>
               <option value="sni">sni</option>
               <option value="cert_hash">cert hash</option>
               <option value="ip">ip</option>
@@ -89,20 +92,11 @@
           </div>
           <div id="reference-search-results" class="empty-box">No search results yet.</div>
           <p class="compact-note">Bundled historical reference matching is local. Live prevalence work can use Shodan where supported.</p>
-        </section>
+        </details>
         <section class="panel">
-          <div class="panel-title-row">
-            <h2>JA / Derived Breakdown</h2>
-            <div class="panel-actions">
-              <button id="light-jarm-button" type="button">Run Light JARM</button>
-              <button id="light-cert-button" type="button">Grab TLS Cert</button>
-              <button id="light-http-button" type="button">HTTP Metadata</button>
-              <button id="pcap-mimic-button" type="button">Run PCAP-Mimic</button>
-              <button id="shodan-enrich-button" type="button">Run Shodan Enrichment</button>
-            </div>
-          </div>
-          <div id="ja-breakdown" class="empty-box">No selected fingerprint yet.</div>
-          <p class="compact-note">Light Testing is bounded and labeled as <span class="mono">light_active_probe</span>. PCAP-Mimic is separate and labeled as <span class="mono">pcap_mimic_active</span>. Shodan remains opt-in third-party enrichment.</p>
+          <h2>Artifact Focus</h2>
+          <div id="ja-breakdown" class="empty-box">No selected flow yet.</div>
+          <p class="compact-note">This pane keeps the selected flow's high-signal fingerprint values close at hand while the main output shows the full structured detail.</p>
         </section>
         <details class="panel" open>
           <summary>Indicator Assessments</summary>

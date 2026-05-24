@@ -30,6 +30,16 @@ def ingest_pcap(
         (file_sha256,),
     ).fetchone()
     if existing_sample:
+        parse_warnings: list[str] = []
+        stored_existing_path = _find_stored_pcap(upload_dir, file_sha256)
+        if stored_existing_path and stored_existing_path.exists():
+            flows = conn.execute(
+                "SELECT * FROM flows WHERE sample_id = ? ORDER BY id",
+                (existing_sample["id"],),
+            ).fetchall()
+            for flow in flows:
+                _reset_passive_artifacts_for_flow(conn, int(flow["id"]))
+                parse_warnings.extend(_extract_and_store_observations(conn, stored_existing_path, existing_sample["id"], dict(flow)))
         _refresh_sample_selection_labels(conn, existing_sample['id'])
         flows = conn.execute(
             "SELECT * FROM flows WHERE sample_id = ? ORDER BY id",
@@ -40,7 +50,7 @@ def ingest_pcap(
             "sha256": file_sha256,
             "sample": dict(existing_sample),
             "flows": [dict(row) for row in flows],
-            "parse_warnings": [],
+            "parse_warnings": parse_warnings,
         }
 
     stored_path = _store_uploaded_pcap(source_path, original_filename, file_sha256, upload_dir)
@@ -363,16 +373,19 @@ def _build_enriched_selection_label(conn, flow: dict[str, Any]) -> str:
                 hints.append(f"SNI={tls_row['sni']}")
             if tls_row.get('tls_version_negotiated'):
                 hints.append(f"TLS={tls_row['tls_version_negotiated']}")
-        fp_row = conn.execute(
-            "SELECT fingerprint_type, fingerprint_value, provenance FROM fingerprints WHERE flow_id = ? ORDER BY CASE WHEN provenance = 'pcap_derived' THEN 0 ELSE 1 END, id LIMIT 3",
+        fp_rows = conn.execute(
+            "SELECT fingerprint_type, fingerprint_value, provenance FROM fingerprints WHERE flow_id = ? ORDER BY CASE WHEN provenance = 'pcap_derived' THEN 0 ELSE 1 END, id LIMIT 8",
             (flow['id'],),
         ).fetchall()
-        for row in fp_row:
-            fp_type = row.get('fingerprint_type')
+        found_tls_fps = set()
+        for row in fp_rows:
+            fp_type = (row.get('fingerprint_type') or '').lower()
             fp_value = row.get('fingerprint_value')
-            if fp_type in {'ja4', 'jarm', 'ja3s'} and fp_value:
+            if fp_type in {'ja4', 'ja4s'} and fp_value and fp_type not in found_tls_fps:
                 hints.append(f"{fp_type.upper()}={_short_hint(fp_value)}")
-                break
+                found_tls_fps.add(fp_type)
+        if not found_tls_fps:
+            hints.append("JA4/JA4S-ready")
 
     if (flow.get('protocol') or '').upper() == 'HTTP':
         http_row = conn.execute(
@@ -384,10 +397,28 @@ def _build_enriched_selection_label(conn, flow: dict[str, Any]) -> str:
                 hints.append(f"Host={http_row['host']}")
             elif http_row.get('full_url'):
                 hints.append(f"URL={_short_hint(http_row['full_url'], max_len=32)}")
+        ja4h_row = conn.execute(
+            "SELECT fingerprint_value FROM fingerprints WHERE flow_id = ? AND fingerprint_type = 'ja4h' ORDER BY id LIMIT 1",
+            (flow['id'],),
+        ).fetchone()
+        if ja4h_row and ja4h_row.get('fingerprint_value'):
+            hints.append(f"JA4H={_short_hint(ja4h_row['fingerprint_value'])}")
+        else:
+            hints.append("JA4H-ready")
+
+    if (flow.get('protocol') or '').upper() == 'SSH':
+        hassh_row = conn.execute(
+            "SELECT fingerprint_value FROM fingerprints WHERE flow_id = ? AND fingerprint_type = 'hassh' ORDER BY id LIMIT 1",
+            (flow['id'],),
+        ).fetchone()
+        if hassh_row and hassh_row.get('fingerprint_value'):
+            hints.append(f"HASSH={_short_hint(hassh_row['fingerprint_value'])}")
+        else:
+            hints.append("HASSH-ready")
 
     if not hints:
         return base
-    return f"{base} | {' | '.join(hints[:2])}"
+    return f"{base} | {' | '.join(hints[:3])}"
 
 
 def _short_hint(value: str, max_len: int = 22) -> str:
@@ -402,6 +433,8 @@ def _extract_and_store_observations(conn, pcap_path: Path, sample_id: int, flow:
     warnings: list[str] = []
     _extract_http_observations(conn, pcap_path, flow)
     _extract_tls_observations_and_fingerprints(conn, pcap_path, sample_id, flow)
+    _extract_ssh_observations_and_fingerprints(conn, pcap_path, sample_id, flow)
+    warnings.extend(_extract_additional_ja4plus_fingerprints(conn, pcap_path, sample_id, flow))
     cert_result = extract_and_store_certificates(conn, pcap_path, flow)
     warnings.extend(cert_result.get('warnings', []))
     return warnings
@@ -417,9 +450,22 @@ def _extract_http_observations(conn, pcap_path: Path, flow: dict[str, Any]) -> N
         "-e", "http.host",
         "-e", "http.request.uri",
         "-e", "http.request.full_uri",
+        "-e", "http.request.version",
         "-e", "http.user_agent",
+        "-e", "http.accept",
+        "-e", "http.accept_language",
+        "-e", "http.accept_encoding",
+        "-e", "http.referer",
+        "-e", "http.cookie",
+        "-e", "http.connection",
+        "-e", "http.authorization",
+        "-e", "http.cache_control",
         "-e", "http.response.code",
+        "-e", "http.response.phrase",
         "-e", "http.location",
+        "-e", "http.content_type",
+        "-e", "http.content_length_header",
+        "-e", "http.server",
     ]
     proc = subprocess.run(cmd, capture_output=True, text=True, check=False)
     if proc.returncode != 0:
@@ -428,17 +474,84 @@ def _extract_http_observations(conn, pcap_path: Path, flow: dict[str, Any]) -> N
     inserted = False
     for line in proc.stdout.splitlines():
         parts = line.split("\t")
-        if len(parts) < 8:
+        if len(parts) < 18:
             continue
-        observed_at, method, host, uri, full_uri, user_agent, status_code, location = parts[:8]
-        if not any([method, host, uri, full_uri, user_agent, status_code, location]):
+        (
+            observed_at,
+            method,
+            host,
+            uri,
+            full_uri,
+            request_version,
+            user_agent,
+            accept,
+            accept_language,
+            accept_encoding,
+            referer,
+            cookie,
+            connection_header,
+            authorization,
+            cache_control,
+            status_code,
+            response_phrase,
+            location,
+            content_type,
+            content_length_header,
+            server_header,
+        ) = (parts + [""] * 21)[:21]
+        if not any([
+            method,
+            host,
+            uri,
+            full_uri,
+            request_version,
+            user_agent,
+            accept,
+            accept_language,
+            accept_encoding,
+            referer,
+            cookie,
+            connection_header,
+            authorization,
+            cache_control,
+            status_code,
+            response_phrase,
+            location,
+            content_type,
+            content_length_header,
+            server_header,
+        ]):
             continue
+        request_headers = {
+            key: value for key, value in (
+                ("host", host),
+                ("user-agent", user_agent),
+                ("accept", accept),
+                ("accept-language", accept_language),
+                ("accept-encoding", accept_encoding),
+                ("referer", referer),
+                ("cookie", cookie),
+                ("connection", connection_header),
+                ("authorization", authorization),
+                ("cache-control", cache_control),
+            ) if value
+        }
+        response_headers = {
+            key: value for key, value in (
+                ("content-type", content_type),
+                ("content-length", content_length_header),
+                ("location", location),
+                ("server", server_header),
+            ) if value
+        }
         conn.execute(
             """
             INSERT INTO observations_http (
                 flow_id, request_method, host, uri, full_url, user_agent,
-                status_code, location_header, observed_at, provenance
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                query_string, referer, status_code, location_header,
+                request_headers_json, response_headers_json, response_body_summary_json,
+                observed_at, provenance
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 flow["id"],
@@ -447,8 +560,16 @@ def _extract_http_observations(conn, pcap_path: Path, flow: dict[str, Any]) -> N
                 uri or None,
                 full_uri or None,
                 user_agent or None,
+                uri.split("?", 1)[1] if uri and "?" in uri else None,
+                referer or None,
                 _int_or_none(status_code),
                 location or None,
+                json.dumps(request_headers) if request_headers else None,
+                json.dumps(response_headers) if response_headers else None,
+                json.dumps({
+                    "http_version": request_version or None,
+                    "response_phrase": response_phrase or None,
+                }),
                 observed_at or None,
                 "pcap_observed",
             ),
@@ -568,6 +689,242 @@ def _extract_tls_observations_and_fingerprints(conn, pcap_path: Path, sample_id:
         conn.execute("UPDATE flows SET protocol = ? WHERE id = ?", ("TLS", flow["id"]))
 
 
+def _extract_ssh_observations_and_fingerprints(conn, pcap_path: Path, sample_id: int, flow: dict[str, Any]) -> None:
+    display_filter = f"({_flow_display_filter(flow)}) && ssh"
+    cmd = [
+        "tshark", "-r", str(pcap_path), "-Y", display_filter,
+        "-T", "fields", "-E", "separator=\t", "-E", "occurrence=f",
+        "-e", "frame.time_epoch",
+        "-e", "ssh.protocol",
+        "-e", "ssh.kex.hassh",
+        "-e", "ssh.kex.hassh_algorithms",
+        "-e", "ssh.kex.hasshserver",
+        "-e", "ssh.kex.hasshserver_algorithms",
+    ]
+    proc = subprocess.run(cmd, capture_output=True, text=True, check=False)
+    if proc.returncode != 0:
+        return
+
+    fingerprint_seen: set[tuple[str, str, str]] = set()
+    inserted = False
+    for line in proc.stdout.splitlines():
+        parts = line.split("\t")
+        if len(parts) < 6:
+            continue
+        observed_at, protocol_banner, hassh, hassh_algorithms, hassh_server, hassh_server_algorithms = parts[:6]
+        if not any([protocol_banner, hassh, hassh_server]):
+            continue
+        cur = conn.execute(
+            """
+            INSERT INTO observations_ssh (
+                flow_id, protocol_banner_client, protocol_banner_server,
+                kex_algorithms_json, observed_at, provenance
+            ) VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (
+                flow["id"],
+                protocol_banner or None,
+                protocol_banner or None,
+                json.dumps({
+                    "client": hassh_algorithms or None,
+                    "server": hassh_server_algorithms or None,
+                }),
+                observed_at or None,
+                "pcap_observed",
+            ),
+        )
+        ssh_obs_id = cur.lastrowid
+        inserted = True
+
+        for fp_value, role, raw_value in (
+            (hassh, "client", hassh_algorithms),
+            (hassh_server, "server", hassh_server_algorithms),
+        ):
+            value = (fp_value or "").strip()
+            if not value:
+                continue
+            key = ("hassh", role, value)
+            if key in fingerprint_seen:
+                continue
+            fingerprint_seen.add(key)
+            conn.execute(
+                """
+                INSERT INTO fingerprints (
+                    flow_id, sample_id, fingerprint_type, fingerprint_value,
+                    role, source_observation_table, source_observation_id,
+                    component_summary_json, display_summary_json, observed_at, provenance
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    flow["id"],
+                    sample_id,
+                    "hassh",
+                    value,
+                    role,
+                    "observations_ssh",
+                    ssh_obs_id,
+                    json.dumps({"algorithms": raw_value}) if raw_value else None,
+                    json.dumps({"label": value, "role": role, "raw": raw_value}) if raw_value else json.dumps({"label": value, "role": role}),
+                    observed_at or None,
+                    "pcap_derived",
+                ),
+            )
+
+    if inserted:
+        conn.execute("UPDATE flows SET protocol = ? WHERE id = ? AND protocol NOT IN ('TLS')", ("SSH", flow["id"]))
+
+
+def _extract_additional_ja4plus_fingerprints(conn, pcap_path: Path, sample_id: int, flow: dict[str, Any]) -> list[str]:
+    try:
+        from ja4plus import generate_ja4h, generate_ja4s
+        from ja4plus.fingerprinters.ja4h import extract_http_info
+        from ja4plus.fingerprinters.ja4s import extract_tls_info
+        from scapy.all import PcapReader, Raw, TCP, UDP
+    except Exception as exc:
+        return [f"ja4plus support unavailable: {exc}"]
+
+    warnings: list[str] = []
+    seen: set[tuple[str, str]] = set()
+    try:
+        reader = PcapReader(str(pcap_path))
+    except Exception as exc:
+        return [f"Unable to reopen PCAP for ja4plus derivation: {exc}"]
+
+    with reader:
+        for packet in reader:
+            if Raw not in packet:
+                continue
+            if not _packet_matches_flow(packet, flow):
+                continue
+
+            ja4h_value = generate_ja4h(packet)
+            if ja4h_value:
+                http_info = extract_http_info(packet) or {}
+                _insert_fingerprint_once(
+                    conn,
+                    sample_id=sample_id,
+                    flow_id=flow["id"],
+                    fingerprint_type="ja4h",
+                    fingerprint_value=ja4h_value,
+                    role="client",
+                    source_observation_table="observations_http",
+                    component_summary=http_info,
+                    display_summary={"label": ja4h_value, "method": http_info.get("method"), "version": http_info.get("version")},
+                    seen=seen,
+                )
+
+            ja4s_value = generate_ja4s(packet)
+            if ja4s_value:
+                tls_info = extract_tls_info(packet) or {}
+                _insert_fingerprint_once(
+                    conn,
+                    sample_id=sample_id,
+                    flow_id=flow["id"],
+                    fingerprint_type="ja4s",
+                    fingerprint_value=ja4s_value,
+                    role="server",
+                    source_observation_table="observations_tls",
+                    component_summary={
+                        "version": tls_info.get("version"),
+                        "cipher": tls_info.get("cipher"),
+                        "extensions": tls_info.get("extensions"),
+                        "alpn_protocols": tls_info.get("alpn_protocols"),
+                    },
+                    display_summary={
+                        "label": ja4s_value,
+                        "version": tls_info.get("version"),
+                        "cipher": tls_info.get("cipher"),
+                    },
+                    seen=seen,
+                )
+
+    return warnings
+
+
+def _insert_fingerprint_once(
+    conn,
+    *,
+    sample_id: int,
+    flow_id: int,
+    fingerprint_type: str,
+    fingerprint_value: str,
+    role: str,
+    source_observation_table: str,
+    component_summary: dict[str, Any] | None,
+    display_summary: dict[str, Any] | None,
+    seen: set[tuple[str, str]],
+) -> None:
+    value = (fingerprint_value or "").strip()
+    if not value:
+        return
+    key = (fingerprint_type, value)
+    if key in seen:
+        return
+    seen.add(key)
+    exists = conn.execute(
+        """
+        SELECT id FROM fingerprints
+        WHERE flow_id = ? AND sample_id = ? AND fingerprint_type = ? AND fingerprint_value = ?
+        LIMIT 1
+        """,
+        (flow_id, sample_id, fingerprint_type, value),
+    ).fetchone()
+    if exists:
+        return
+    conn.execute(
+        """
+        INSERT INTO fingerprints (
+            flow_id, sample_id, fingerprint_type, fingerprint_value,
+            role, source_observation_table, source_observation_id,
+            component_summary_json, display_summary_json, observed_at, provenance
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, ?)
+        """,
+        (
+            flow_id,
+            sample_id,
+            fingerprint_type,
+            value,
+            role,
+            source_observation_table,
+            None,
+            json.dumps(component_summary) if component_summary else None,
+            json.dumps(display_summary) if display_summary else json.dumps({"label": value}),
+            "pcap_derived",
+        ),
+    )
+
+
+def _packet_matches_flow(packet, flow: dict[str, Any]) -> bool:
+    try:
+        from scapy.all import IP, IPv6, TCP, UDP
+    except Exception:
+        return False
+
+    ip_layer = packet.getlayer(IP) or packet.getlayer(IPv6)
+    if ip_layer is None:
+        return False
+
+    transport_name = (flow.get("transport") or "TCP").upper()
+    if transport_name == "TCP":
+        l4_layer = packet.getlayer(TCP)
+    elif transport_name == "UDP":
+        l4_layer = packet.getlayer(UDP)
+    else:
+        l4_layer = None
+    if l4_layer is None:
+        return False
+
+    src_ip = getattr(ip_layer, "src", None)
+    dst_ip = getattr(ip_layer, "dst", None)
+    src_port = int(getattr(l4_layer, "sport", 0))
+    dst_port = int(getattr(l4_layer, "dport", 0))
+
+    a = (flow.get("src_ip"), int(flow.get("src_port") or 0), flow.get("dst_ip"), int(flow.get("dst_port") or 0))
+    b = (flow.get("dst_ip"), int(flow.get("dst_port") or 0), flow.get("src_ip"), int(flow.get("src_port") or 0))
+    candidate = (src_ip, src_port, dst_ip, dst_port)
+    return candidate == a or candidate == b
+
+
 def _flow_display_filter(flow: dict[str, Any]) -> str:
     transport = (flow.get("transport") or "TCP").lower()
     src_ip = flow["src_ip"]
@@ -597,6 +954,21 @@ def _store_uploaded_pcap(source_path: Path, original_filename: str, file_sha256:
     if not target.exists():
         shutil.copy2(source_path, target)
     return target
+
+
+def _find_stored_pcap(upload_dir: Path, file_sha256: str) -> Path | None:
+    for candidate in sorted(upload_dir.glob(f"{file_sha256}.*")):
+        if candidate.is_file():
+            return candidate
+    return None
+
+
+def _reset_passive_artifacts_for_flow(conn, flow_id: int) -> None:
+    conn.execute("DELETE FROM observations_http WHERE flow_id = ? AND provenance IN ('pcap_observed', 'pcap_derived')", (flow_id,))
+    conn.execute("DELETE FROM observations_tls WHERE flow_id = ? AND provenance IN ('pcap_observed', 'pcap_derived')", (flow_id,))
+    conn.execute("DELETE FROM observations_ssh WHERE flow_id = ? AND provenance IN ('pcap_observed', 'pcap_derived')", (flow_id,))
+    conn.execute("DELETE FROM certificates WHERE flow_id = ? AND provenance IN ('pcap_observed', 'pcap_derived')", (flow_id,))
+    conn.execute("DELETE FROM fingerprints WHERE flow_id = ? AND provenance IN ('pcap_observed', 'pcap_derived')", (flow_id,))
 
 
 def _protocol_summary(flow_records: list[dict[str, Any]]) -> dict[str, int]:
