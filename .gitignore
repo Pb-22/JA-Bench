@@ -1,0 +1,16 @@
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.venv/
+venv/
+.env
+config/keys.env
+data/uploads/*
+!data/uploads/.gitkeep
+data/output/*
+!data/output/.gitkeep
+data/cache/*
+!data/cache/.gitkeep
+data/db/*
+!data/db/.gitkeep

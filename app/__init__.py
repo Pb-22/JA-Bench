@@ -1,0 +1,1 @@
+"""JA-Bench application package."""

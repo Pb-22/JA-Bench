@@ -1,0 +1,18 @@
+services:
+  ja-bench:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: ja-bench
+    ports:
+      - "7008:5000"
+    environment:
+      JA_BENCH_DATA_ROOT: /data
+      JA_BENCH_DB_PATH: /data/db/ja-bench.sqlite3
+    volumes:
+      - ./data/uploads:/data/uploads
+      - ./data/output:/data/output
+      - ./data/cache:/data/cache
+      - ./data/db:/data/db
+      - ./config:/data/config
+    restart: unless-stopped

@@ -1,0 +1,169 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>JA-Bench</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+  <script defer src="{{ url_for('static', filename='js/app.js') }}"></script>
+</head>
+<body data-theme="night-owl-dark-no-italic">
+  <main class="page-shell">
+    <header class="hero">
+      <div>
+        <h1>JA-Bench</h1>
+        <p class="subtitle">Passive-first fingerprint workbench</p>
+      </div>
+      <div class="hero-meta">
+        <span>DB: {{ db_path }}</span>
+        <span>Shodan: {{ 'enabled' if shodan_enabled else 'not configured' }}</span>
+        <span>Shodan cache TTL: {{ shodan_cache_ttl_seconds }}s</span>
+      </div>
+    </header>
+
+    <section class="panel-grid top-grid">
+      <section class="panel">
+        <h2>PCAP Input</h2>
+        <div class="pcap-row">
+          <input id="pcap-file" type="file" accept=".pcap,.pcapng" aria-label="Select PCAP file">
+          <input id="pcap-file-name" type="text" value="No file selected" readonly>
+          <button id="read-pcap-button" type="button">Read PCAP</button>
+        </div>
+        <p id="pcap-hint" class="hint">Upload a PCAP to parse flows and populate the selector.</p>
+      </section>
+
+      <section class="panel">
+        <h2>Conversation Selector</h2>
+        <select id="conversation-selector" disabled>
+          <option>No parsed conversations yet</option>
+        </select>
+      </section>
+
+      <section class="panel">
+        <h2>Mode + Quick Search</h2>
+        <div class="status-chip">Passive-first, container-backed, copy-friendly</div>
+        <div class="mode-row">
+          <label><input type="radio" checked disabled> Passive</label>
+          <label><input type="radio" disabled> Light Testing</label>
+          <label><input type="radio" disabled> PCAP-Mimic</label>
+        </div>
+        <div class="search-row">
+          <input id="quick-search-value" type="text" value="" placeholder="JA3, JA3S, JA4, JARM, SNI, cert hash, or IP">
+          <select id="quick-search-type" aria-label="Quick search type">
+            <option value="auto" selected>auto</option>
+            <option value="ja3">ja3</option>
+            <option value="ja3s">ja3s</option>
+            <option value="ja4">ja4</option>
+            <option value="jarm">jarm</option>
+            <option value="sni">sni</option>
+            <option value="cert_hash">cert hash</option>
+            <option value="ip">ip</option>
+          </select>
+          <button id="quick-search-button" type="button">Search</button>
+        </div>
+      </section>
+    </section>
+
+    <section class="panel-grid main-grid">
+      <section class="panel output-panel">
+        <h2>Main Output</h2>
+        <div id="main-output" class="output-box">JA-Bench is ready.<br><br>Upload a PCAP to:<br>- hash and deduplicate it<br>- parse flows<br>- populate the conversation selector<br>- extract first-pass HTTP/TLS observations<br>- store initial fingerprint values</div>
+      </section>
+
+      <section class="right-column">
+        <section class="panel">
+          <h2>Matches</h2>
+          <div class="search-row">
+            <input id="reference-search-value" type="text" value="t13d1517h2_8daaf6152771_b0da82dd1658" aria-label="Reference fingerprint search value">
+            <select id="reference-search-type" aria-label="Reference fingerprint search type">
+              <option value="auto">auto</option>
+              <option value="ja3">ja3</option>
+              <option value="ja3s">ja3s</option>
+              <option value="ja4" selected>ja4</option>
+              <option value="jarm">jarm</option>
+              <option value="sni">sni</option>
+              <option value="cert_hash">cert hash</option>
+              <option value="ip">ip</option>
+            </select>
+            <button id="reference-search-button" type="button">Lookup</button>
+          </div>
+          <div id="reference-search-results" class="empty-box">No search results yet.</div>
+          <p class="compact-note">Bundled historical reference matching is local. Live prevalence work can use Shodan where supported.</p>
+        </section>
+        <section class="panel">
+          <div class="panel-title-row">
+            <h2>JA / Derived Breakdown</h2>
+            <div class="panel-actions">
+              <button id="light-jarm-button" type="button">Run Light JARM</button>
+              <button id="light-cert-button" type="button">Grab TLS Cert</button>
+              <button id="light-http-button" type="button">HTTP Metadata</button>
+              <button id="pcap-mimic-button" type="button">Run PCAP-Mimic</button>
+              <button id="shodan-enrich-button" type="button">Run Shodan Enrichment</button>
+            </div>
+          </div>
+          <div id="ja-breakdown" class="empty-box">No selected fingerprint yet.</div>
+          <p class="compact-note">Light Testing is bounded and labeled as <span class="mono">light_active_probe</span>. PCAP-Mimic is separate and labeled as <span class="mono">pcap_mimic_active</span>. Shodan remains opt-in third-party enrichment.</p>
+        </section>
+        <details class="panel" open>
+          <summary>Indicator Assessments</summary>
+          <div id="indicator-assessments" class="empty-box">No assessment loaded yet.</div>
+        </details>
+        <details class="panel" open>
+          <summary>Session Summary</summary>
+          <div class="provenance-legend compact-note">Provenance: <span class="mono">pcap_observed</span>, <span class="mono">pcap_derived</span>, <span class="mono">light_active_probe</span>, <span class="mono">third_party_enrichment</span>, <span class="mono">pcap_mimic_active</span></div>
+          <ul id="session-summary" class="summary-list">
+            <li>Runs: {{ counts.runs }}</li>
+            <li>Samples: {{ counts.samples }}</li>
+            <li>Flows: {{ counts.flows }}</li>
+            <li>Fingerprints: {{ counts.fingerprints }}</li>
+          </ul>
+        </details>
+      </section>
+    </section>
+
+    <section class="panel-grid bottom-grid">
+      <section class="panel">
+        <h2>Logs / Errors</h2>
+        <div id="log-box" class="log-box">No logs yet.</div>
+      </section>
+
+      <section class="panel utility-panel">
+        <h2>Theme + Export</h2>
+        <div class="utility-row">
+          <label for="theme">Theme</label>
+          <select id="theme">
+            <option value="night-owl-dark-no-italic">Night Owl Dark No Italic</option>
+            <option value="dracula">Dracula</option>
+            <option value="catppuccin-macchiato">Catppuccin Macchiato</option>
+            <option value="synthwave84">Synthwave84</option>
+            <option value="panda">Panda</option>
+            <option value="ayu-mirage">Ayu Mirage</option>
+            <option value="kanagawa-wave">Kanagawa Wave</option>
+            <option value="kanagawa-dragon">Kanagawa Dragon</option>
+            <option value="kanagawa-lotus">Kanagawa Lotus</option>
+            <option value="winter-is-coming">Winter is Coming</option>
+            <option value="bluloco-light">Bluloco Light</option>
+            <option value="quiet-light">Quiet Light</option>
+          </select>
+        </div>
+        <div class="utility-row">
+          <label for="scope">Scope</label>
+          <select id="scope">
+            <option>Selected Conversation</option>
+            <option>Search Results</option>
+            <option>All</option>
+          </select>
+        </div>
+        <div class="utility-row">
+          <label for="format">Format</label>
+          <select id="format">
+            <option>CSV</option>
+            <option>JSON</option>
+          </select>
+        </div>
+        <button id="export-button" type="button">Export</button>
+      </section>
+    </section>
+  </main>
+</body>
+</html>
