@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-mkdir -p /data/db /data/uploads /data/output /data/cache /data/config
+mkdir -p /data/db /data/uploads /data/output /data/cache /data/config /data/zeek
 
 if [ -f /data/config/keys.env ]; then
   set -a
@@ -15,6 +15,6 @@ if [ -n "${SHODAN_API_KEY:-}" ]; then
   fi
 fi
 
-python -m app.init_db
+python3 -m app.init_db
 
 exec "$@"

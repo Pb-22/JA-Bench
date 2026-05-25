@@ -14,3 +14,4 @@ data/cache/*
 !data/cache/.gitkeep
 data/db/*
 !data/db/.gitkeep
+data/zeek/

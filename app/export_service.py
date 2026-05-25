@@ -6,204 +6,218 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from .flow_detail_service import get_flow_detail
-from .reference_service import search_reference_fingerprints
+
+SUPPORTED_FORMATS = {"csv", "json", "jsonl"}
+SUPPORTED_SCOPES = {"references", "jarm", "analyst_tables"}
 
 
 def create_export(
     conn,
+    db_path: Path,
     output_dir: Path,
-    scope: str,
+    export_name: str,
     export_format: str,
-    flow_id: int | None = None,
-    search_value: str | None = None,
-    search_type: str | None = None,
+    scope: str,
+    sample_id: int | None = None,
 ) -> dict[str, Any]:
-    scope = (scope or '').strip().lower()
-    export_format = (export_format or '').strip().lower()
-    if scope not in {'selected_conversation', 'search_results', 'all'}:
-        raise ValueError('Unsupported export scope')
-    if export_format not in {'csv', 'json'}:
-        raise ValueError('Unsupported export format')
+    del db_path
+    del sample_id
+
+    export_format = str(export_format or "").strip().lower()
+    scope = str(scope or "").strip().lower()
+    if export_format not in SUPPORTED_FORMATS:
+        raise ValueError("Unsupported export format")
+    if scope not in SUPPORTED_SCOPES:
+        raise ValueError("Unsupported export scope")
 
     output_dir.mkdir(parents=True, exist_ok=True)
-    run_id = _resolve_run_id(conn, scope=scope, flow_id=flow_id)
-    filter_summary = {
-        'scope': scope,
-        'flow_id': flow_id,
-        'search_value': search_value,
-        'search_type': search_type,
-    }
+    base_name = _normalize_export_name(export_name)
+    extension = "json" if export_format == "json" else "jsonl" if export_format == "jsonl" else "csv"
+    output_path = output_dir / f"{base_name}.{extension}"
 
-    timestamp = datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')
-    filename = f"ja-bench-{scope}-{timestamp}.{export_format}"
-    output_path = output_dir / filename
-
-    if scope == 'selected_conversation':
-        if flow_id is None:
-            raise ValueError('Selected conversation export requires flow_id')
-        detail = get_flow_detail(conn, flow_id)
-        if detail is None:
-            raise ValueError('Flow not found for export')
-        if export_format == 'json':
-            output_path.write_text(json.dumps(detail, indent=2, sort_keys=True), encoding='utf-8')
-        else:
-            _write_csv(output_path, _selected_flow_csv_rows(detail))
-    elif scope == 'search_results':
-        if not search_value:
-            raise ValueError('Search results export requires search_value')
-        matches = search_reference_fingerprints(
-            conn,
-            fingerprint_value=search_value,
-            fingerprint_type=(search_type or None),
-            limit=500,
-        )
-        payload = {
-            'scope': scope,
-            'search_type': search_type,
-            'search_value': search_value,
-            'count': len(matches),
-            'matches': matches,
-        }
-        if export_format == 'json':
-            output_path.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding='utf-8')
-        else:
-            _write_csv(output_path, matches)
+    export_bundle = _build_export_bundle(conn, scope)
+    if export_format == "json":
+        output_path.write_text(json.dumps(export_bundle, indent=2, sort_keys=True), encoding="utf-8")
+    elif export_format == "jsonl":
+        _write_jsonl(output_path, _bundle_jsonl_rows(export_bundle))
     else:
-        rows = _all_flow_summary_rows(conn)
-        if export_format == 'json':
-            payload = {
-                'scope': scope,
-                'generated_at': timestamp,
-                'rows': rows,
-            }
-            output_path.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding='utf-8')
-        else:
-            _write_csv(output_path, rows)
+        _write_csv(output_path, _bundle_csv_rows(export_bundle))
+    return _result(output_path, export_format, scope)
 
-    cur = conn.execute(
-        """
-        INSERT INTO exports (run_id, scope, format, filter_summary_json, output_path)
-        VALUES (?, ?, ?, ?, ?)
-        """,
-        (run_id, scope, export_format, json.dumps(filter_summary), str(output_path)),
-    )
 
+def _build_export_bundle(conn, scope: str) -> dict[str, Any]:
+    datasets = _reference_datasets(conn) if scope in {"references", "analyst_tables"} else []
+    references = _reference_fingerprints(conn) if scope in {"references", "analyst_tables"} else []
+    jarm_rows = _saved_jarm_rows(conn) if scope in {"jarm", "analyst_tables"} else []
     return {
-        'export_id': cur.lastrowid,
-        'scope': scope,
-        'format': export_format,
-        'output_path': str(output_path),
-        'filename': filename,
+        "export_type": "ja-bench-analyst-tables",
+        "scope": scope,
+        "generated_at": _utc_timestamp(),
+        "reference_dataset_count": len(datasets),
+        "reference_count": len(references),
+        "jarm_count": len(jarm_rows),
+        "reference_datasets": datasets,
+        "reference_fingerprints": references,
+        "jarm_fingerprints": jarm_rows,
     }
 
 
-def _resolve_run_id(conn, scope: str, flow_id: int | None) -> int:
-    if scope == 'selected_conversation' and flow_id is not None:
-        row = conn.execute(
-            """
-            SELECT s.run_id
-            FROM flows f
-            JOIN samples s ON s.id = f.sample_id
-            WHERE f.id = ?
-            """,
-            (flow_id,),
-        ).fetchone()
-        if row:
-            return row['run_id']
-
-    row = conn.execute('SELECT id FROM runs ORDER BY id DESC LIMIT 1').fetchone()
-    if not row:
-        raise ValueError('No run available yet for export')
-    return row['id']
+def _reference_datasets(conn) -> list[dict[str, Any]]:
+    rows = conn.execute(
+        """
+        SELECT *
+        FROM reference_datasets
+        ORDER BY is_historical DESC, id
+        """
+    ).fetchall()
+    return [dict(row) for row in rows]
 
 
-def _selected_flow_csv_rows(detail: dict[str, Any]) -> list[dict[str, Any]]:
-    flow = detail.get('flow') or {}
+def _reference_fingerprints(conn) -> list[dict[str, Any]]:
+    rows = conn.execute(
+        """
+        SELECT
+            rf.*,
+            rd.dataset_key,
+            rd.display_name AS dataset_display_name,
+            rd.source AS dataset_source,
+            rd.source_date AS dataset_source_date,
+            rd.version AS dataset_version,
+            rd.is_historical AS dataset_is_historical,
+            rd.license_note AS dataset_license_note
+        FROM reference_fingerprints rf
+        JOIN reference_datasets rd ON rd.id = rf.dataset_id
+        ORDER BY rf.id
+        """
+    ).fetchall()
+    records = []
+    for row in rows:
+        item = dict(row)
+        item["record_source"] = _loads(item.get("record_source_json"), {})
+        item.pop("record_source_json", None)
+        records.append(item)
+    return records
+
+
+def _saved_jarm_rows(conn) -> list[dict[str, Any]]:
+    rows = conn.execute(
+        """
+        SELECT *
+        FROM jarm_fingerprints
+        ORDER BY id
+        """
+    ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def _bundle_csv_rows(bundle: dict[str, Any]) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
-    rows.append({
-        'record_type': 'flow',
-        'flow_id': flow.get('id'),
-        'protocol': flow.get('protocol'),
-        'transport': flow.get('transport'),
-        'src_ip': flow.get('src_ip'),
-        'src_port': flow.get('src_port'),
-        'dst_ip': flow.get('dst_ip'),
-        'dst_port': flow.get('dst_port'),
-        'selection_label': flow.get('selection_label'),
-        'packet_count': flow.get('packet_count'),
-        'byte_count': flow.get('byte_count'),
-    })
-    for section_name in ('http', 'tls', 'ssh', 'certificates', 'active_probes', 'fingerprints', 'enrichments'):
-        for row in detail.get(section_name, []):
-            item = {'record_type': section_name[:-1] if section_name.endswith('s') else section_name, 'flow_id': flow.get('id')}
-            item.update(row)
-            rows.append(item)
+
+    for dataset in bundle.get("reference_datasets") or []:
+        rows.append(
+            {
+                "record_type": "reference_dataset",
+                "scope": bundle.get("scope"),
+                "dataset_id": dataset.get("id"),
+                "dataset_key": dataset.get("dataset_key"),
+                "dataset_display_name": dataset.get("display_name"),
+                "dataset_description": dataset.get("description"),
+                "dataset_source": dataset.get("source"),
+                "dataset_source_date": dataset.get("source_date"),
+                "dataset_version": dataset.get("version"),
+                "dataset_is_historical": dataset.get("is_historical"),
+                "dataset_license_note": dataset.get("license_note"),
+                "created_at": dataset.get("created_at"),
+            }
+        )
+
+    for reference in bundle.get("reference_fingerprints") or []:
+        rows.append(
+            {
+                "record_type": "reference_fingerprint",
+                "scope": bundle.get("scope"),
+                "reference_id": reference.get("id"),
+                "dataset_id": reference.get("dataset_id"),
+                "dataset_key": reference.get("dataset_key"),
+                "dataset_display_name": reference.get("dataset_display_name"),
+                "dataset_is_historical": reference.get("dataset_is_historical"),
+                "fingerprint_type": reference.get("fingerprint_type"),
+                "fingerprint_value": reference.get("fingerprint_value"),
+                "related_fingerprint_string": reference.get("related_fingerprint_string"),
+                "application": reference.get("application"),
+                "library_name": reference.get("library_name"),
+                "device_name": reference.get("device_name"),
+                "os_name": reference.get("os_name"),
+                "user_agent_string": reference.get("user_agent_string"),
+                "certificate_authority": reference.get("certificate_authority"),
+                "ja4s_fingerprint": reference.get("ja4s_fingerprint"),
+                "ja4h_fingerprint": reference.get("ja4h_fingerprint"),
+                "ja4x_fingerprint": reference.get("ja4x_fingerprint"),
+                "ja4t_fingerprint": reference.get("ja4t_fingerprint"),
+                "confidence_note": reference.get("confidence_note"),
+                "record_source": reference.get("record_source"),
+                "created_at": reference.get("created_at"),
+            }
+        )
+
+    for jarm_row in bundle.get("jarm_fingerprints") or []:
+        rows.append(
+            {
+                "record_type": "jarm_fingerprint",
+                "scope": bundle.get("scope"),
+                "jarm_id": jarm_row.get("id"),
+                "source_packet_id": jarm_row.get("source_packet_id"),
+                "source_sample_id": jarm_row.get("source_sample_id"),
+                "target_host": jarm_row.get("target_host"),
+                "target_ip": jarm_row.get("target_ip"),
+                "target_port": jarm_row.get("target_port"),
+                "destination_domain": jarm_row.get("destination_domain"),
+                "jarm_fingerprint": jarm_row.get("jarm_fingerprint"),
+                "jarm_first_30": jarm_row.get("jarm_first_30"),
+                "jarm_last_32": jarm_row.get("jarm_last_32"),
+                "jarm_raw": jarm_row.get("jarm_raw"),
+                "analyst_note": jarm_row.get("analyst_note"),
+                "created_at": jarm_row.get("created_at"),
+            }
+        )
+
     return rows
 
 
-def _all_flow_summary_rows(conn) -> list[dict[str, Any]]:
-    sql = """
-        SELECT
-            f.id AS flow_id,
-            s.filename,
-            s.sha256,
-            f.protocol,
-            f.transport,
-            f.src_ip,
-            f.src_port,
-            f.dst_ip,
-            f.dst_port,
-            f.packet_count,
-            f.byte_count,
-            f.selection_label,
-            (
-                SELECT oh.host
-                FROM observations_http oh
-                WHERE oh.flow_id = f.id AND oh.host IS NOT NULL AND oh.host != ''
-                ORDER BY oh.observed_at, oh.id
-                LIMIT 1
-            ) AS http_host,
-            (
-                SELECT ot.sni
-                FROM observations_tls ot
-                WHERE ot.flow_id = f.id AND ot.sni IS NOT NULL AND ot.sni != ''
-                ORDER BY ot.observed_at, ot.id
-                LIMIT 1
-            ) AS tls_sni,
-            (
-                SELECT fp.fingerprint_value
-                FROM fingerprints fp
-                WHERE fp.flow_id = f.id AND fp.fingerprint_type = 'ja4' AND fp.provenance = 'pcap_derived'
-                ORDER BY fp.id
-                LIMIT 1
-            ) AS observed_ja4,
-            (
-                SELECT fp.fingerprint_value
-                FROM fingerprints fp
-                WHERE fp.flow_id = f.id AND fp.fingerprint_type = 'ja3s' AND fp.provenance = 'pcap_derived'
-                ORDER BY fp.id
-                LIMIT 1
-            ) AS observed_ja3s,
-            (
-                SELECT fp.fingerprint_value
-                FROM fingerprints fp
-                WHERE fp.flow_id = f.id AND fp.fingerprint_type = 'jarm'
-                ORDER BY fp.id DESC
-                LIMIT 1
-            ) AS any_jarm,
-            (
-                SELECT cert.subject_dn
-                FROM certificates cert
-                WHERE cert.flow_id = f.id
-                ORDER BY cert.chain_position, cert.id
-                LIMIT 1
-            ) AS cert_subject
-        FROM flows f
-        JOIN samples s ON s.id = f.sample_id
-        ORDER BY f.id
-    """
-    return [dict(row) for row in conn.execute(sql).fetchall()]
+def _bundle_jsonl_rows(bundle: dict[str, Any]) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+
+    for dataset in bundle.get("reference_datasets") or []:
+        rows.append(
+            {
+                "export_type": bundle.get("export_type"),
+                "scope": bundle.get("scope"),
+                "record_type": "reference_dataset",
+                "dataset": dataset,
+            }
+        )
+
+    for reference in bundle.get("reference_fingerprints") or []:
+        rows.append(
+            {
+                "export_type": bundle.get("export_type"),
+                "scope": bundle.get("scope"),
+                "record_type": "reference_fingerprint",
+                "reference": reference,
+            }
+        )
+
+    for jarm_row in bundle.get("jarm_fingerprints") or []:
+        rows.append(
+            {
+                "export_type": bundle.get("export_type"),
+                "scope": bundle.get("scope"),
+                "record_type": "jarm_fingerprint",
+                "jarm": jarm_row,
+            }
+        )
+
+    return rows
 
 
 def _write_csv(path: Path, rows: list[dict[str, Any]]) -> None:
@@ -213,16 +227,63 @@ def _write_csv(path: Path, rows: list[dict[str, Any]]) -> None:
         for key in row.keys():
             if key not in fieldnames:
                 fieldnames.append(key)
-    with path.open('w', encoding='utf-8', newline='') as handle:
+    with path.open("w", encoding="utf-8", newline="") as handle:
         writer = csv.DictWriter(handle, fieldnames=fieldnames)
         writer.writeheader()
         for row in normalized_rows:
-            writer.writerow({key: _jsonish(value) for key, value in row.items()})
+            writer.writerow({key: _csv_value(value) for key, value in row.items()})
 
 
-def _jsonish(value: Any) -> str:
+def _write_jsonl(path: Path, rows: list[dict[str, Any]]) -> None:
+    with path.open("w", encoding="utf-8") as handle:
+        for row in rows:
+            handle.write(json.dumps(row, ensure_ascii=False, sort_keys=True))
+            handle.write("\n")
+
+
+def _csv_value(value: Any) -> str:
     if value is None:
-        return ''
+        return ""
     if isinstance(value, (dict, list)):
-        return json.dumps(value, sort_keys=True)
+        return json.dumps(value, ensure_ascii=False, sort_keys=True)
     return str(value)
+
+
+def _loads(value: Any, fallback: Any = None) -> Any:
+    if value in (None, ""):
+        return {} if fallback is None else fallback
+    if isinstance(value, (dict, list)):
+        return value
+    try:
+        return json.loads(value)
+    except (TypeError, json.JSONDecodeError):
+        return {} if fallback is None else fallback
+
+
+def _normalize_export_name(value: str) -> str:
+    text = str(value or "").strip().lower()
+    safe = []
+    for char in text:
+        if char.isalnum():
+            safe.append(char)
+        elif char in {"-", "_", "."}:
+            safe.append(char)
+        elif char.isspace():
+            safe.append("-")
+    normalized = "".join(safe).strip("-.")
+    if not normalized:
+        normalized = f"ja-bench-export-{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}"
+    return normalized
+
+
+def _utc_timestamp() -> str:
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _result(output_path: Path, export_format: str, scope: str) -> dict[str, Any]:
+    return {
+        "format": export_format,
+        "scope": scope,
+        "filename": output_path.name,
+        "output_path": str(output_path),
+    }

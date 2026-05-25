@@ -5,125 +5,28 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>JA-Bench</title>
   <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+  <script>window.JA42_BOOTSTRAP = {{ {"shodan_enabled": shodan_enabled}|tojson }};</script>
   <script defer src="{{ url_for('static', filename='js/app.js') }}"></script>
 </head>
 <body data-theme="night-owl-dark-no-italic">
   <main class="page-shell">
     <header class="hero">
       <div>
+        <div class="hero-kicker">Passive fingerprint workbench</div>
         <h1>JA-Bench</h1>
-        <p class="subtitle">Passive-first fingerprint workbench</p>
+        <p class="subtitle">PCAP-driven JA-family analysis, direct hash breakdowns, historical matching, and analyst curation in one container.</p>
       </div>
       <div class="hero-meta">
         <span>DB: {{ db_path }}</span>
-        <span>Shodan: {{ 'enabled' if shodan_enabled else 'not configured' }}</span>
-        <span>Shodan cache TTL: {{ shodan_cache_ttl_seconds }}s</span>
+        <span>Zeek script: {{ zeek_script }}</span>
       </div>
     </header>
 
-    <section class="panel-grid top-grid">
-      <section class="panel">
+    <section class="panel top-panel">
+      <div class="panel-title-row">
         <h2>PCAP Input</h2>
-        <div class="pcap-row">
-          <input id="pcap-file" type="file" accept=".pcap,.pcapng" aria-label="Select PCAP file">
-          <input id="pcap-file-name" type="text" value="No file selected" readonly>
-          <button id="read-pcap-button" type="button">Read PCAP</button>
-        </div>
-        <p id="pcap-hint" class="hint">Upload a PCAP to parse flows and populate the selector.</p>
-      </section>
-
-      <section class="panel">
-        <h2>Conversation Selector</h2>
-        <select id="conversation-selector" disabled>
-          <option>No parsed conversations yet</option>
-        </select>
-      </section>
-
-      <section class="panel">
-        <h2>Mode</h2>
-        <div class="status-chip">Passive-first, container-backed, copy-friendly</div>
-        <div class="mode-row">
-          <label><input type="radio" name="view-mode" value="passive" checked> Passive</label>
-          <label><input type="radio" name="view-mode" value="light"> Light Testing</label>
-          <label><input type="radio" name="view-mode" value="mimic"> PCAP-Mimic</label>
-        </div>
-        <p class="compact-note">Mode changes the main output focus. Passive keeps the view wire-first, while Light Testing and PCAP-Mimic surface the bounded follow-up artifacts for the selected flow.</p>
-      </section>
-    </section>
-
-    <section class="panel-grid main-grid">
-      <section class="panel output-panel">
-        <h2>Main Output</h2>
-        <div id="main-output" class="output-box">JA-Bench is ready.<br><br>Upload a PCAP to:<br>- hash and deduplicate it<br>- parse flows<br>- populate the conversation selector<br>- extract passive HTTP, TLS, cert, and SSH artifacts<br>- derive and store JA-family and related fingerprint values</div>
-      </section>
-
-      <section class="right-column">
-        <section class="panel">
-          <div class="panel-title-row">
-            <h2>Actions</h2>
-          </div>
-          <div class="panel-actions">
-            <button id="light-jarm-button" type="button">Run Light JARM</button>
-            <button id="light-cert-button" type="button">Grab TLS Cert</button>
-            <button id="light-http-button" type="button">HTTP Metadata</button>
-            <button id="pcap-mimic-button" type="button">Run PCAP-Mimic</button>
-            <button id="shodan-enrich-button" type="button">Run Shodan Enrichment</button>
-          </div>
-          <p class="compact-note">Every active action runs inside the container and writes labeled artifacts back into the selected flow.</p>
-        </section>
-        <details id="matches-panel" class="panel">
-          <summary>Matches</summary>
-          <div class="search-row">
-            <input id="reference-search-value" type="text" value="" placeholder="Lookup JA3, JA3S, JA4, JA4H, JA4S, JARM, HASSH, SNI, cert hash, or IP" aria-label="Reference fingerprint search value">
-            <select id="reference-search-type" aria-label="Reference fingerprint search type">
-              <option value="auto" selected>auto</option>
-              <option value="ja3">ja3</option>
-              <option value="ja3s">ja3s</option>
-              <option value="ja4">ja4</option>
-              <option value="ja4s">ja4s</option>
-              <option value="ja4h">ja4h</option>
-              <option value="jarm">jarm</option>
-              <option value="hassh">hassh</option>
-              <option value="sni">sni</option>
-              <option value="cert_hash">cert hash</option>
-              <option value="ip">ip</option>
-            </select>
-            <button id="reference-search-button" type="button">Lookup</button>
-          </div>
-          <div id="reference-search-results" class="empty-box">No search results yet.</div>
-          <p class="compact-note">Bundled historical reference matching is local. Live prevalence work can use Shodan where supported.</p>
-        </details>
-        <section class="panel">
-          <h2>Artifact Focus</h2>
-          <div id="ja-breakdown" class="empty-box">No selected flow yet.</div>
-          <p class="compact-note">This pane keeps the selected flow's high-signal fingerprint values close at hand while the main output shows the full structured detail.</p>
-        </section>
-        <details class="panel" open>
-          <summary>Indicator Assessments</summary>
-          <div id="indicator-assessments" class="empty-box">No assessment loaded yet.</div>
-        </details>
-        <details class="panel" open>
-          <summary>Session Summary</summary>
-          <div class="provenance-legend compact-note">Provenance: <span class="mono">pcap_observed</span>, <span class="mono">pcap_derived</span>, <span class="mono">light_active_probe</span>, <span class="mono">third_party_enrichment</span>, <span class="mono">pcap_mimic_active</span></div>
-          <ul id="session-summary" class="summary-list">
-            <li>Runs: {{ counts.runs }}</li>
-            <li>Samples: {{ counts.samples }}</li>
-            <li>Flows: {{ counts.flows }}</li>
-            <li>Fingerprints: {{ counts.fingerprints }}</li>
-          </ul>
-        </details>
-      </section>
-    </section>
-
-    <section class="panel-grid bottom-grid">
-      <section class="panel">
-        <h2>Logs / Errors</h2>
-        <div id="log-box" class="log-box">No logs yet.</div>
-      </section>
-
-      <section class="panel utility-panel">
-        <h2>Theme + Export</h2>
-        <div class="utility-row">
+        <div class="utility-row compact">
+          <button id="export-button" type="button">Export</button>
           <label for="theme">Theme</label>
           <select id="theme">
             <option value="night-owl-dark-no-italic">Night Owl Dark No Italic</option>
@@ -140,24 +43,134 @@
             <option value="quiet-light">Quiet Light</option>
           </select>
         </div>
-        <div class="utility-row">
-          <label for="scope">Scope</label>
-          <select id="scope">
-            <option>Selected Conversation</option>
-            <option>Search Results</option>
-            <option>All</option>
+      </div>
+      <div class="pcap-row">
+        <input id="pcap-file" type="file" accept=".pcap,.pcapng" aria-label="Select PCAP file">
+        <input id="pcap-file-name" type="text" value="No file selected" readonly>
+        <button id="read-pcap-button" type="button">Read PCAP</button>
+      </div>
+      <p class="hint">Upload one PCAP, derive every supported passive JA-family artifact, then expand packet rows for field-level breakdowns and historical matches.</p>
+    </section>
+
+    <section class="panel summary-panel">
+      <div class="panel-title-row">
+        <h2>Direct Hash Analysis</h2>
+        <div id="standalone-status" class="status-chip">Ready</div>
+      </div>
+      <div class="drawer-grid">
+        <div class="drawer-field">
+          <label for="standalone-hash-type">Hash Type</label>
+          <select id="standalone-hash-type">
+            <option value="ja4">JA4</option>
+            <option value="ja4s">JA4S</option>
+            <option value="ja4h">JA4H</option>
+            <option value="ja4x">JA4X</option>
+            <option value="ja4t">JA4T</option>
+            <option value="ja4ts">JA4TS</option>
+            <option value="ja4l">JA4L</option>
+            <option value="ja4ls">JA4LS</option>
+            <option value="ja4ssh">JA4SSH</option>
+            <option value="ja3">JA3</option>
+            <option value="ja3s">JA3S</option>
+            <option value="hassh">HASSH</option>
+            <option value="hassh_server">HASSH_SERVER</option>
+            <option value="ja4d">JA4D</option>
+            <option value="ja4d6">JA4D6</option>
+            <option value="jarm">JARM</option>
           </select>
         </div>
-        <div class="utility-row">
-          <label for="format">Format</label>
-          <select id="format">
-            <option>CSV</option>
-            <option>JSON</option>
-          </select>
+        <div class="drawer-field standalone-input-span">
+          <label for="standalone-hash-value">Hash Value</label>
+          <input id="standalone-hash-value" type="text" placeholder="Paste one JA/JARM/JA3/HASSH value">
         </div>
-        <button id="export-button" type="button">Export</button>
-      </section>
+        <div class="drawer-field standalone-button-field">
+          <label>&nbsp;</label>
+          <button id="standalone-analyze-button" type="button">Analyze Hash</button>
+        </div>
+      </div>
+      <p class="hint">This mode skips PCAP context and active enrichment. It focuses on one provided value: breakdown, inferences, saved matches, and analyst save actions.</p>
+      <div id="standalone-analysis-result" class="standalone-result-shell">
+        <div class="summary-empty">Paste a hash and analyze it to see one direct artifact view without packet context.</div>
+      </div>
+    </section>
+
+    <section class="stats-grid">
+      <article class="panel stat-panel">
+        <span class="stat-label">Runs</span>
+        <strong id="stat-runs">{{ counts.runs }}</strong>
+      </article>
+      <article class="panel stat-panel">
+        <span class="stat-label">Samples</span>
+        <strong id="stat-samples">{{ counts.samples }}</strong>
+      </article>
+      <article class="panel stat-panel">
+        <span class="stat-label">Packets</span>
+        <strong id="stat-packets">{{ counts.packets }}</strong>
+      </article>
+      <article class="panel stat-panel">
+        <span class="stat-label">Artifacts</span>
+        <strong id="stat-artifacts">{{ counts.artifacts }}</strong>
+      </article>
+    </section>
+
+    <section class="panel summary-panel">
+      <h2>Current Sample</h2>
+      <div id="sample-summary" class="summary-grid">
+        <div class="summary-empty">No PCAP loaded yet.</div>
+      </div>
+    </section>
+
+    <section class="panel packet-panel">
+      <div class="panel-title-row">
+        <h2>Packet Window</h2>
+        <div id="packet-window-status" class="status-chip">Awaiting upload</div>
+      </div>
+      <div class="code-window">
+        <table class="packet-table">
+          <thead>
+            <tr>
+              <th class="expander-col">+</th>
+              <th class="number-col">#</th>
+              <th>src:port -> dst:port</th>
+              <th>Derived JA / hash artifacts</th>
+              <th>Protocol / time</th>
+            </tr>
+          </thead>
+          <tbody id="packet-table-body">
+            <tr class="empty-row">
+              <td colspan="5">JA-Bench is ready. Read a PCAP to populate the packet window.</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="panel">
+      <h2>Logs / Errors</h2>
+      <div id="log-box" class="log-box">No logs yet.</div>
     </section>
   </main>
+
+  <div id="drawer-overlay" class="drawer-overlay" hidden></div>
+  <aside id="drawer-panel" class="drawer-panel" aria-hidden="true">
+    <div class="drawer-header">
+      <div>
+        <div id="drawer-kicker" class="hero-kicker">Analyst Save</div>
+        <h2 id="drawer-title">Save Value</h2>
+      </div>
+      <button id="drawer-close" type="button">Close</button>
+    </div>
+    <div id="drawer-body" class="drawer-body"></div>
+  </aside>
+  <aside id="citation-panel" class="citation-panel" aria-hidden="true">
+    <div class="citation-header">
+      <div>
+        <div class="hero-kicker">References</div>
+        <h2>Citations</h2>
+      </div>
+      <button id="citation-close" type="button">Close</button>
+    </div>
+    <div id="citation-body" class="citation-body"></div>
+  </aside>
 </body>
 </html>
