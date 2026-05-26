@@ -7,6 +7,33 @@ JA-Bench is a Dockerized workbench for analyzing JA-family network fingerprints 
 
 The goal is practical analyst workflow, not just extraction. JA-Bench breaks hashes into readable fields, adds protocol-aware inferences, checks local historical matches, lets you save curated reference entries, and keeps the provenance clear.
 
+## Walkthrough example
+
+I used a Quasar RAT PCAP exported from ANY.RUN to walk one real row through the current JA-Bench workflow. Packet `291` is an HTTP request from `192.168.100.5:49978` to `208.95.112.1:80 (ip-api.com)`. From that row I could read the passive `JA4H` result, open the packet context, add Shodan host context, run an active JARM probe against port `443`, save both passive and active findings, and then export the analyst tables.
+
+![JA-Bench input modes and theme controls](docs/images/jabench_quasar_input_modes.png)
+
+The top panel gives two entry points:
+
+- load a PCAP and work packet-first
+- switch to Direct Hash Analysis when you only have one fingerprint value
+
+![Packet 291 with the JA4H card open](docs/images/jabench_quasar_packet291_ja4h.png)
+
+That packet row is useful because it carries a `JA4H` result and a `JA4L` result on a plain HTTP request. The `JA4H` card breaks the HTTP fingerprint into readable fields, then keeps the reasoning under it so the interpretation stays tied to the packet that produced it.
+
+![Shodan host summary for the same destination](docs/images/jabench_quasar_shodan_summary.png)
+
+From the same row, JA-Bench can add host context with Shodan. That keeps the destination IP, domain, organization, certificate issuer, and open ports close to the passive evidence instead of forcing a jump to another tool.
+
+![JARM result and notes](docs/images/jabench_quasar_jarm_result.png)
+
+If the host justifies it, JA-Bench can run an active JARM probe from the packet context. In this case, the passive row was HTTP on port `80`, but the host summary also showed `443` open, so I used that same destination for a live TLS fingerprint and saved it alongside the packet-side findings.
+
+![Export drawer with rename and export type options](docs/images/jabench_quasar_export_drawer.png)
+
+The export drawer is the last step. It lets you rename the output, choose `CSV`, `JSON`, or `JSONL / NDJSON`, and export either the JA reference table, the JARM table, or both together.
+
 ## What JA-Bench does
 
 - Upload one PCAP and render a packet-first analysis window
