@@ -19,6 +19,7 @@ const packetUiState = new Map();
 let drawerState = null;
 let citationDrawerState = null;
 let standaloneAnalysisResult = null;
+let currentInputMode = 'pcap';
 const SAVEABLE_ARTIFACT_TYPES = new Set(['ja4', 'ja4s', 'ja4h', 'ja4x', 'ja4t', 'ja4ts', 'ja3', 'ja3s', 'hassh', 'hassh_server', 'ja4l', 'ja4ls', 'ja4ssh', 'ja4d', 'ja4d6']);
 const appRuntime = {
   shodanConfigured: Boolean(globalThis?.JA42_BOOTSTRAP?.shodan_enabled),
@@ -460,6 +461,25 @@ function initializeTheme() {
   try { stored = localStorage.getItem('ja-bench-theme') || stored; } catch {}
   applyTheme(stored);
   document.getElementById('theme')?.addEventListener('change', (event) => applyTheme(event.target.value));
+}
+
+function setInputMode(mode) {
+  const nextMode = mode === 'direct' ? 'direct' : 'pcap';
+  currentInputMode = nextMode;
+
+  const pcapPanel = document.getElementById('pcap-input-panel');
+  const directPanel = document.getElementById('direct-hash-panel');
+  const pcapButton = document.getElementById('mode-pcap-button');
+  const directButton = document.getElementById('mode-direct-button');
+
+  pcapPanel?.toggleAttribute('hidden', nextMode !== 'pcap');
+  directPanel?.toggleAttribute('hidden', nextMode !== 'direct');
+
+  pcapButton?.classList.toggle('mode-button-active', nextMode === 'pcap');
+  directButton?.classList.toggle('mode-button-active', nextMode === 'direct');
+
+  if (pcapButton) pcapButton.setAttribute('aria-selected', nextMode === 'pcap' ? 'true' : 'false');
+  if (directButton) directButton.setAttribute('aria-selected', nextMode === 'direct' ? 'true' : 'false');
 }
 
 function setSummary(sample) {
@@ -2476,6 +2496,9 @@ async function uploadPcap() {
 }
 
 function wireEvents() {
+  document.querySelectorAll('[data-input-mode]').forEach((button) => {
+    button.addEventListener('click', () => setInputMode(button.dataset.inputMode));
+  });
   document.getElementById('pcap-file')?.addEventListener('change', (event) => {
     const file = event.target.files?.[0];
     document.getElementById('pcap-file-name').value = file ? file.name : 'No file selected';
@@ -2503,5 +2526,6 @@ function wireEvents() {
 document.addEventListener('DOMContentLoaded', () => {
   initializeTheme();
   wireEvents();
+  setInputMode('pcap');
   renderStandaloneAnalysisToDom(null);
 });

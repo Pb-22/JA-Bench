@@ -16,17 +16,13 @@
         <h1>JA-Bench</h1>
         <p class="subtitle">PCAP-driven JA-family analysis, direct hash breakdowns, historical matching, and analyst curation in one container.</p>
       </div>
-      <div class="hero-meta">
-        <span>DB: {{ db_path }}</span>
-        <span>Zeek script: {{ zeek_script }}</span>
-      </div>
-    </header>
-
-    <section class="panel top-panel">
-      <div class="panel-title-row">
-        <h2>PCAP Input</h2>
-        <div class="utility-row compact">
-          <button id="export-button" type="button">Export</button>
+      <div class="hero-side">
+        <div class="hero-meta">
+          <span>DB: {{ db_path }}</span>
+          <span>Zeek script: {{ zeek_script }}</span>
+        </div>
+        <div class="utility-row hero-utility-row">
+          <button id="export-button" class="button-export" type="button">Export</button>
           <label for="theme">Theme</label>
           <select id="theme">
             <option value="night-owl-dark-no-italic">Night Owl Dark No Italic</option>
@@ -44,53 +40,64 @@
           </select>
         </div>
       </div>
-      <div class="pcap-row">
-        <input id="pcap-file" type="file" accept=".pcap,.pcapng" aria-label="Select PCAP file">
-        <input id="pcap-file-name" type="text" value="No file selected" readonly>
-        <button id="read-pcap-button" type="button">Read PCAP</button>
-      </div>
-      <p class="hint">Upload one PCAP, derive every supported passive JA-family artifact, then expand packet rows for field-level breakdowns and historical matches.</p>
-    </section>
+    </header>
 
-    <section class="panel summary-panel">
+    <section class="panel top-panel">
       <div class="panel-title-row">
-        <h2>Direct Hash Analysis</h2>
-        <div id="standalone-status" class="status-chip">Ready</div>
-      </div>
-      <div class="drawer-grid">
-        <div class="drawer-field">
-          <label for="standalone-hash-type">Hash Type</label>
-          <select id="standalone-hash-type">
-            <option value="ja4">JA4</option>
-            <option value="ja4s">JA4S</option>
-            <option value="ja4h">JA4H</option>
-            <option value="ja4x">JA4X</option>
-            <option value="ja4t">JA4T</option>
-            <option value="ja4ts">JA4TS</option>
-            <option value="ja4l">JA4L</option>
-            <option value="ja4ls">JA4LS</option>
-            <option value="ja4ssh">JA4SSH</option>
-            <option value="ja3">JA3</option>
-            <option value="ja3s">JA3S</option>
-            <option value="hassh">HASSH</option>
-            <option value="hassh_server">HASSH_SERVER</option>
-            <option value="ja4d">JA4D</option>
-            <option value="ja4d6">JA4D6</option>
-            <option value="jarm">JARM</option>
-          </select>
-        </div>
-        <div class="drawer-field standalone-input-span">
-          <label for="standalone-hash-value">Hash Value</label>
-          <input id="standalone-hash-value" type="text" placeholder="Paste one JA/JARM/JA3/HASSH value">
-        </div>
-        <div class="drawer-field standalone-button-field">
-          <label>&nbsp;</label>
-          <button id="standalone-analyze-button" type="button">Analyze Hash</button>
+        <h2>Analysis Input</h2>
+        <div class="mode-switch" role="tablist" aria-label="Input mode">
+          <button id="mode-pcap-button" class="mode-button mode-button-active" type="button" role="tab" aria-selected="true" aria-controls="pcap-input-panel" data-input-mode="pcap">PCAP Input</button>
+          <button id="mode-direct-button" class="mode-button" type="button" role="tab" aria-selected="false" aria-controls="direct-hash-panel" data-input-mode="direct">Direct Hash Analysis</button>
         </div>
       </div>
-      <p class="hint">This mode skips PCAP context and active enrichment. It focuses on one provided value: breakdown, inferences, saved matches, and analyst save actions.</p>
-      <div id="standalone-analysis-result" class="standalone-result-shell">
-        <div class="summary-empty">Paste a hash and analyze it to see one direct artifact view without packet context.</div>
+      <div id="pcap-input-panel" class="input-mode-panel">
+        <div class="pcap-row">
+          <input id="pcap-file" type="file" accept=".pcap,.pcapng" aria-label="Select PCAP file">
+          <input id="pcap-file-name" type="text" value="No file selected" readonly>
+          <button id="read-pcap-button" class="button-read-pcap" type="button">Read PCAP</button>
+        </div>
+        <p class="hint">Upload one PCAP, derive every supported passive JA-family artifact, then expand packet rows for field-level breakdowns and historical matches.</p>
+      </div>
+      <div id="direct-hash-panel" class="input-mode-panel" hidden>
+        <div class="panel-title-row subpanel-title-row">
+          <h3>Direct Hash Analysis</h3>
+          <div id="standalone-status" class="status-chip">Ready</div>
+        </div>
+        <div class="drawer-grid">
+          <div class="drawer-field">
+            <label for="standalone-hash-type">Hash Type</label>
+            <select id="standalone-hash-type">
+              <option value="ja4">JA4</option>
+              <option value="ja4s">JA4S</option>
+              <option value="ja4h">JA4H</option>
+              <option value="ja4x">JA4X</option>
+              <option value="ja4t">JA4T</option>
+              <option value="ja4ts">JA4TS</option>
+              <option value="ja4l">JA4L</option>
+              <option value="ja4ls">JA4LS</option>
+              <option value="ja4ssh">JA4SSH</option>
+              <option value="ja3">JA3</option>
+              <option value="ja3s">JA3S</option>
+              <option value="hassh">HASSH</option>
+              <option value="hassh_server">HASSH_SERVER</option>
+              <option value="ja4d">JA4D</option>
+              <option value="ja4d6">JA4D6</option>
+              <option value="jarm">JARM</option>
+            </select>
+          </div>
+          <div class="drawer-field standalone-input-span">
+            <label for="standalone-hash-value">Hash Value</label>
+            <input id="standalone-hash-value" type="text" placeholder="Paste one JA/JARM/JA3/HASSH value">
+          </div>
+          <div class="drawer-field standalone-button-field">
+            <label>&nbsp;</label>
+            <button id="standalone-analyze-button" class="button-analyze-hash" type="button">Analyze Hash</button>
+          </div>
+        </div>
+        <p class="hint">This mode skips PCAP context and active enrichment. It focuses on one provided value: breakdown, inferences, saved matches, and analyst save actions.</p>
+        <div id="standalone-analysis-result" class="standalone-result-shell">
+          <div class="summary-empty">Paste a hash and analyze it to see one direct artifact view without packet context.</div>
+        </div>
       </div>
     </section>
 

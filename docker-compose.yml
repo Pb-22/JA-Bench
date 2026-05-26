@@ -5,7 +5,7 @@ services:
       dockerfile: Dockerfile
     container_name: ja-bench
     ports:
-      - "7009:5000"
+      - "7008:5000"
     environment:
       JA4_2_DATA_ROOT: /data
       JA4_2_DB_PATH: /data/db/ja-bench.sqlite3

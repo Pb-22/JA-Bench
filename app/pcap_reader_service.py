@@ -410,7 +410,7 @@ def _extract_packet_artifacts(packet, packet_number: int, processor: Processor) 
                 "role": _role_for_artifact_type(artifact_type),
                 "raw_fingerprint": result.get("raw"),
                 "raw_original_order": result.get("raw_original_order"),
-                "parts": _breakdown_for_artifact(artifact_type, artifact_value),
+                "parts": breakdown_for_artifact(artifact_type, artifact_value),
                 "provenance": "pcap_derived",
             }
         )

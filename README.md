@@ -102,7 +102,7 @@ docker compose up -d --build
 
 Open:
 
-- <http://localhost:7009>
+- <http://localhost:7008>
 
 ## Optional Shodan configuration
 
