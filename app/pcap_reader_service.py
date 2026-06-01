@@ -5,6 +5,7 @@ import ipaddress
 import re
 import shutil
 import subprocess
+import tempfile
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -313,12 +314,8 @@ def _refresh_sample_packet_endpoints(conn, sample_id: int, upload_dir: Path) -> 
     row_id_by_packet_number = {int(row["packet_number"]): int(row["id"]) for row in rows}
 
     try:
-        reader = PcapReader(str(stored_path))
-    except Exception:
-        return
-
-    with reader:
-        for packet_number, packet in enumerate(reader, start=1):
+        packet_iter = _iter_capture_packets(stored_path)
+        for packet_number, packet in enumerate(packet_iter, start=1):
             row_id = row_id_by_packet_number.get(packet_number)
             if row_id is None:
                 continue
@@ -333,6 +330,8 @@ def _refresh_sample_packet_endpoints(conn, sample_id: int, upload_dir: Path) -> 
                 "UPDATE packet_rows SET endpoint_text = ? WHERE id = ?",
                 (endpoint_text, row_id),
             )
+    except PcapParseError:
+        return
 
 
 def _analyze_packets(pcap_path: Path) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, str | None]]:
@@ -347,47 +346,41 @@ def _analyze_packets(pcap_path: Path) -> tuple[list[dict[str, Any]], list[dict[s
 
     seen_hassh: set[tuple[int, str, str]] = set()
 
-    try:
-        reader = PcapReader(str(pcap_path))
-    except Exception as exc:
-        raise PcapParseError(f"Unable to read PCAP: {exc}") from exc
+    for packet_number, packet in enumerate(_iter_capture_packets(pcap_path), start=1):
+        ts_epoch = _float_time(getattr(packet, "time", None))
+        capture_start = ts_epoch if capture_start is None else min(capture_start, ts_epoch or capture_start)
+        capture_end = ts_epoch if capture_end is None else max(capture_end, ts_epoch or capture_end)
 
-    with reader:
-        for packet_number, packet in enumerate(reader, start=1):
-            ts_epoch = _float_time(getattr(packet, "time", None))
-            capture_start = ts_epoch if capture_start is None else min(capture_start, ts_epoch or capture_start)
-            capture_end = ts_epoch if capture_end is None else max(capture_end, ts_epoch or capture_end)
+        row = _build_packet_row(packet_number, packet, ts_epoch)
+        row["endpoint_text"] = _decorate_destination_endpoint(
+            row["src_ip"],
+            row["src_port"],
+            row["dst_ip"],
+            row["dst_port"],
+            domain_map.get(packet_number),
+        )
+        packet_artifacts = _extract_packet_artifacts(packet, packet_number, processor)
 
-            row = _build_packet_row(packet_number, packet, ts_epoch)
-            row["endpoint_text"] = _decorate_destination_endpoint(
-                row["src_ip"],
-                row["src_port"],
-                row["dst_ip"],
-                row["dst_port"],
-                domain_map.get(packet_number),
-            )
-            packet_artifacts = _extract_packet_artifacts(packet, packet_number, processor)
+        if packet_number in ja3_map:
+            hashes = ja3_map[packet_number]
+            if hashes.get("ja3"):
+                packet_artifacts.append(_artifact_stub(packet_number, "ja3", hashes["ja3"], "client"))
+            if hashes.get("ja3s"):
+                packet_artifacts.append(_artifact_stub(packet_number, "ja3s", hashes["ja3s"], "server"))
 
-            if packet_number in ja3_map:
-                hashes = ja3_map[packet_number]
-                if hashes.get("ja3"):
-                    packet_artifacts.append(_artifact_stub(packet_number, "ja3", hashes["ja3"], "client"))
-                if hashes.get("ja3s"):
-                    packet_artifacts.append(_artifact_stub(packet_number, "ja3s", hashes["ja3s"], "server"))
+        hassh_entries = _extract_hassh_artifacts(packet, packet_number, seen_hassh)
+        packet_artifacts.extend(hassh_entries)
 
-            hassh_entries = _extract_hassh_artifacts(packet, packet_number, seen_hassh)
-            packet_artifacts.extend(hassh_entries)
-
-            row["artifact_summary"] = [
-                {
-                    "artifact_type": artifact["artifact_type"],
-                    "artifact_value": artifact["artifact_value"],
-                    "role": artifact["role"],
-                }
-                for artifact in packet_artifacts
-            ]
-            packet_rows.append(row)
-            artifact_rows.extend(packet_artifacts)
+        row["artifact_summary"] = [
+            {
+                "artifact_type": artifact["artifact_type"],
+                "artifact_value": artifact["artifact_value"],
+                "role": artifact["role"],
+            }
+            for artifact in packet_artifacts
+        ]
+        packet_rows.append(row)
+        artifact_rows.extend(packet_artifacts)
 
     return packet_rows, artifact_rows, {
         "start_ts_text": _format_epoch(capture_start),
@@ -586,15 +579,62 @@ def _build_packet_row(packet_number: int, packet, ts_epoch: float | None) -> dic
 
 def _read_packet_by_number(pcap_path: Path, packet_number: int):
     try:
-        reader = PcapReader(str(pcap_path))
-    except Exception:
-        return None
-
-    with reader:
-        for current_number, packet in enumerate(reader, start=1):
+        packet_iter = _iter_capture_packets(pcap_path)
+        for current_number, packet in enumerate(packet_iter, start=1):
             if current_number == packet_number:
                 return packet
+    except PcapParseError:
+        return None
     return None
+
+
+def _iter_capture_packets(capture_path: Path):
+    """Yield packets from pcap or pcapng, converting with editcap only if Scapy cannot open it directly."""
+    converted_path: Path | None = None
+    try:
+        try:
+            reader = PcapReader(str(capture_path))
+        except Exception as direct_exc:
+            converted_path = _convert_capture_to_pcap(capture_path, direct_exc)
+            try:
+                reader = PcapReader(str(converted_path))
+            except Exception as converted_exc:
+                raise PcapParseError(
+                    "Unable to read capture as PCAP/PCAPNG after editcap conversion: "
+                    f"{converted_exc}"
+                ) from converted_exc
+
+        with reader:
+            yield from reader
+    finally:
+        if converted_path is not None:
+            converted_path.unlink(missing_ok=True)
+
+
+def _convert_capture_to_pcap(capture_path: Path, direct_exc: Exception) -> Path:
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".pcap") as tmp:
+        converted_path = Path(tmp.name)
+
+    cmd = ["editcap", "-F", "pcap", str(capture_path), str(converted_path)]
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+    except FileNotFoundError as exc:
+        converted_path.unlink(missing_ok=True)
+        raise PcapParseError(
+            f"Unable to read capture directly ({direct_exc}); editcap is not installed for PCAPNG conversion"
+        ) from exc
+    except Exception as exc:
+        converted_path.unlink(missing_ok=True)
+        raise PcapParseError(f"Unable to read capture directly ({direct_exc}); editcap conversion failed: {exc}") from exc
+
+    if proc.returncode != 0:
+        converted_path.unlink(missing_ok=True)
+        stderr_tail = (proc.stderr or "").strip()[-500:]
+        raise PcapParseError(
+            f"Unable to read capture directly ({direct_exc}); editcap conversion failed: {stderr_tail or 'no stderr'}"
+        )
+
+    return converted_path
 
 
 def _match_verbose_value(text: str, pattern: str) -> str:
