@@ -4,13 +4,15 @@ Windows top-site browser PCAP collector for JA-Bench.
 Purpose:
   Capture browser TCP/80 and TCP/443 traffic for a selected Tranco rank range while
   minimizing browser/OS background contamination with a resolved-target-IP BPF filter.
+  Each launched browser process tree is terminated after its visit window, and matching
+  target TCP connections are closed between visits unless -NoCloseTargetConnections is set.
 
 Examples:
   powershell.exe -ExecutionPolicy Bypass -File C:\Tools\top-site-browser-pcap.ps1 -ListInterfaces
-  powershell.exe -ExecutionPolicy Bypass -File C:\Tools\top-site-browser-pcap.ps1 -Browser Chrome  -StartRank 21 -Count 20 -Interface 1 -FreshRun
-  powershell.exe -ExecutionPolicy Bypass -File C:\Tools\top-site-browser-pcap.ps1 -Browser Firefox -StartRank 21 -Count 20 -Interface 1 -FreshRun
-  powershell.exe -ExecutionPolicy Bypass -File C:\Tools\top-site-browser-pcap.ps1 -Browser Edge    -StartRank 21 -Count 20 -Interface 1 -FreshRun
-  powershell.exe -ExecutionPolicy Bypass -File C:\Tools\top-site-browser-pcap.ps1 -Browser All     -StartRank 21 -Count 20 -Interface 1 -FreshRun
+  powershell.exe -ExecutionPolicy Bypass -File C:\Tools\top-site-browser-pcap.ps1 -Browser Chrome  -StartRank 1 -Count 20 -Interface 1 -FreshRun
+  powershell.exe -ExecutionPolicy Bypass -File C:\Tools\top-site-browser-pcap.ps1 -Browser Firefox -StartRank 1 -Count 20 -Interface 1 -FreshRun
+  powershell.exe -ExecutionPolicy Bypass -File C:\Tools\top-site-browser-pcap.ps1 -Browser Edge    -StartRank 1 -Count 20 -Interface 1 -FreshRun
+  powershell.exe -ExecutionPolicy Bypass -File C:\Tools\top-site-browser-pcap.ps1 -Browser All     -StartRank 1 -Count 20 -Interface 1 -FreshRun
 
 Outputs one PCAPNG per browser plus sidecars:
   top-sites.csv, resolved-target-ips.csv, capture-filter.txt, visit-log.csv,

@@ -11,10 +11,12 @@ Examples:
   python3 top_site_browser_pcap_macos.py --list-interfaces
   sudo python3 top_site_browser_pcap_macos.py --browser All --start-rank 1 --count 20 --fresh-run
   sudo python3 top_site_browser_pcap_macos.py --browser Safari --start-rank 1 --count 20 --interface auto --fresh-run
-  sudo python3 top_site_browser_pcap_macos.py --browser Chrome --start-rank 1 --count 2 --capture-filter-mode tcp-ports --fresh-run
+  sudo python3 top_site_browser_pcap_macos.py --browser Chrome --start-rank 1 --count 2 --interface utun4 --fresh-run
 
 Notes:
   - dumpcap on macOS usually requires root/sudo or Wireshark capture-helper setup.
+  - --interface auto performs a short live target probe and selects the interface
+    that sees matching target-IP TCP/80+443 browser traffic.
   - Chrome and Edge are launched with temporary user-data dirs and background/
     QUIC-disabling flags where supported.
   - Safari does not provide a stable per-run profile CLI. This script opens URLs
@@ -167,6 +169,33 @@ def list_interfaces(dumpcap: str) -> None:
         sys.stderr.write(cp.stderr)
 
 
+def dumpcap_interfaces(dumpcap: str) -> list[str]:
+    cp = run([dumpcap, "-D"], check=False)
+    names: list[str] = []
+    for line in cp.stdout.splitlines():
+        match = re.match(r"\s*\d+\.\s+([^\s]+)", line)
+        if match:
+            names.append(match.group(1))
+    return names
+
+
+def interface_probe_candidates(dumpcap: str) -> list[str]:
+    names = [name for name in dumpcap_interfaces(dumpcap) if name not in {"lo0", "any"}]
+    if not names:
+        return []
+
+    def score(name: str) -> tuple[int, str]:
+        if name.startswith("utun"):
+            return (0, name)
+        if re.match(r"en\d+", name):
+            return (1, name)
+        if name.startswith(("bridge", "awdl", "llw")):
+            return (3, name)
+        return (2, name)
+
+    return sorted(names, key=score)
+
+
 def default_route_interface() -> str | None:
     """Return the active default-route interface on macOS, e.g. en0/en1/utun."""
     try:
@@ -182,13 +211,81 @@ def default_route_interface() -> str | None:
     return None
 
 
-def resolve_capture_interface(requested: str) -> str:
+def probe_capture_interface(
+    dumpcap: str,
+    capture_filter: str,
+    browser: dict[str, str],
+    site_domain: str,
+    probe_root: Path,
+    page_seconds: int,
+    between_seconds: int,
+) -> str | None:
+    candidates = interface_probe_candidates(dumpcap)
+    if not candidates:
+        return default_route_interface()
+
+    probe_root.mkdir(parents=True, exist_ok=True)
+    procs: list[tuple[str, subprocess.Popen[str], object]] = []
+    for iface in candidates:
+        pcap_path = probe_root / f"interface-{safe_token(iface)}.pcapng"
+        log_path = probe_root / f"interface-{safe_token(iface)}.dumpcap.log"
+        log = log_path.open("w", encoding="utf-8")
+        try:
+            proc = subprocess.Popen([dumpcap, "-i", iface, "-f", capture_filter, "-w", str(pcap_path)], stdout=log, stderr=subprocess.STDOUT, text=True, start_new_session=True)
+            procs.append((iface, proc, log))
+        except Exception as exc:
+            log.write(f"Failed to start dumpcap on {iface}: {exc}\n")
+            log.close()
+
+    if not procs:
+        return default_route_interface()
+
+    time.sleep(2)
+    probe_logs = probe_root / "browser-logs"
+    probe_profiles = probe_root / "browser-profiles"
+    try:
+        visit_url(browser, f"https://{site_domain}/", probe_profiles, max(4, min(page_seconds, 8)), between_seconds, probe_logs)
+    finally:
+        for _iface, proc, _log in procs:
+            stop_capture(proc)
+
+    counts: list[tuple[int, str]] = []
+    for iface, _proc, log in procs:
+        try:
+            log.close()
+        except Exception:
+            pass
+        pcap_path = probe_root / f"interface-{safe_token(iface)}.pcapng"
+        packets = pcap_packet_count(pcap_path)
+        if packets is None and pcap_path.exists():
+            packets = max(0, pcap_path.stat().st_size - 4096)
+        counts.append((packets or 0, iface))
+
+    counts.sort(reverse=True)
+    best_packets, best_iface = counts[0]
+    summary = ", ".join(f"{iface}={packets}" for packets, iface in counts[:8])
+    print(f"Interface auto-probe packet counts: {summary}")
+    if best_packets > 0:
+        print(f"Auto-selected capture interface from live target probe: {best_iface}")
+        return best_iface
+    return default_route_interface()
+
+
+def resolve_capture_interface(
+    requested: str,
+    dumpcap: str,
+    capture_filter: str,
+    browser: dict[str, str],
+    site_domain: str,
+    probe_root: Path,
+    page_seconds: int,
+    between_seconds: int,
+) -> str:
     if requested != "auto":
         return requested
-    iface = default_route_interface()
+    iface = probe_capture_interface(dumpcap, capture_filter, browser, site_domain, probe_root, page_seconds, between_seconds)
     if not iface:
-        raise RuntimeError("Could not auto-detect the default-route interface. Run --list-interfaces and pass --interface manually.")
-    print(f"Auto-selected capture interface from default route: {iface}")
+        raise RuntimeError("Could not auto-detect a capture interface. Run --list-interfaces and pass --interface manually.")
     return iface
 
 
@@ -476,7 +573,7 @@ def main() -> int:
     parser.add_argument("--browser", choices=["Chrome", "Safari", "Edge", "All"], default="All")
     parser.add_argument("--start-rank", type=int, default=1)
     parser.add_argument("--count", type=int, default=20)
-    parser.add_argument("--interface", default="auto", help="Capture interface name/number, or 'auto' to use the macOS default-route interface")
+    parser.add_argument("--interface", default="auto", help="Capture interface name/number, or 'auto' to run a short live target probe and select the interface with matching TCP/80+443 traffic")
     parser.add_argument("--list-interfaces", action="store_true")
     parser.add_argument("--output-dir", type=Path, default=DEFAULT_OUTPUT)
     parser.add_argument("--fresh-run", action="store_true")
@@ -500,7 +597,6 @@ def main() -> int:
     if args.list_interfaces:
         list_interfaces(dumpcap)
         return 0
-    args.interface = resolve_capture_interface(args.interface)
 
     browsers = discover_browsers(args.browser, allow_missing=args.allow_missing_browsers)
     if not browsers:
@@ -536,6 +632,19 @@ def main() -> int:
     profiles_root.mkdir(parents=True, exist_ok=True)
     logs_root = run_dir / "browser-logs"
     logs_root.mkdir(exist_ok=True)
+    if args.dry_run and args.interface == "auto":
+        args.interface = default_route_interface() or "auto"
+    elif args.interface == "auto":
+        args.interface = resolve_capture_interface(
+            args.interface,
+            dumpcap,
+            capture_filter,
+            browsers[0],
+            sites[0][1],
+            run_dir / "interface-auto-probe",
+            args.page_seconds,
+            args.between_seconds,
+        )
     os_token = get_os_token()
     expected_visits = len(sites) * 2
 

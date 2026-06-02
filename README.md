@@ -9,7 +9,7 @@ The goal is practical analyst workflow, not just extraction. JA-Bench breaks has
 
 ## Walkthrough example
 
-I used a Quasar RAT PCAP exported from ANY.RUN to walk one real row through the current JA-Bench workflow. Packet `291` is an HTTP request from `192.168.100.5:49978` to `208.95.112.1:80 (ip-api.com)`. From that row I could read the passive `JA4H` result, open the packet context, add Shodan host context, run an active JARM probe against port `443`, save both passive and active findings, and then export the analyst tables.
+A Quasar RAT PCAP exported from ANY.RUN provides a concrete walkthrough of the current JA-Bench workflow. Packet `291` is an HTTP request from `192.168.100.5:49978` to `208.95.112.1:80 (ip-api.com)`. From that row, the workflow shows the passive `JA4H` result, packet context, Shodan host context, an active JARM probe against port `443`, saved passive and active findings, and analyst-table export.
 
 ![JA-Bench input modes and theme controls](docs/images/jabench_quasar_input_modes.png)
 
@@ -28,7 +28,7 @@ From the same row, JA-Bench can add host context with Shodan. That keeps the des
 
 ![JARM result and notes](docs/images/jabench_quasar_jarm_result.png)
 
-If the host justifies it, JA-Bench can run an active JARM probe from the packet context. In this case, the passive row was HTTP on port `80`, but the host summary also showed `443` open, so I used that same destination for a live TLS fingerprint and saved it alongside the packet-side findings.
+If the host justifies it, JA-Bench can run an active JARM probe from the packet context. In this case, the passive row was HTTP on port `80`, but the host summary also showed `443` open, so that same destination can be used for a live TLS fingerprint and saved alongside the packet-side findings.
 
 ![Export drawer with rename and export type options](docs/images/jabench_quasar_export_drawer.png)
 
@@ -130,6 +130,49 @@ docker compose up -d --build
 Open:
 
 - <http://localhost:7008>
+
+
+## Browser PCAP collection helpers
+
+The `tools/` directory includes cross-platform helpers for collecting one PCAPNG per browser over a deterministic Tranco rank range. The collectors resolve each target domain and `www.<domain>` first, then use a TCP/80+443 target-IP BPF filter so captures stay focused on the selected sites.
+
+### macOS Chrome, Safari, and Edge
+
+Install Wireshark so `dumpcap` is available, then run:
+
+```bash
+sudo python3 tools/top_site_browser_pcap_macos.py --browser All --start-rank 1 --count 20 --fresh-run
+```
+
+The macOS collector defaults to `--interface auto`. Auto mode performs a short live target probe with the same target-IP capture filter and selects the interface that sees the matching browser traffic. On systems with VPN, proxy, or security-client tunnels, this commonly selects an inner `utun*` interface rather than the default physical interface.
+
+Useful macOS checks and overrides:
+
+```bash
+python3 tools/top_site_browser_pcap_macos.py --list-interfaces
+sudo python3 tools/top_site_browser_pcap_macos.py --browser All --start-rank 1 --count 20 --interface utun4 --fresh-run
+```
+
+Use `--capture-filter-mode tcp-ports` only for diagnostics. The default `target` mode is the recommended corpus mode.
+
+### Windows Chrome, Firefox, and Edge
+
+Install Wireshark/Npcap, list interfaces, then run the selected capture interface:
+
+```powershell
+powershell.exe -ExecutionPolicy Bypass -File .\tools\top-site-browser-pcap.ps1 -ListInterfaces
+powershell.exe -ExecutionPolicy Bypass -File .\tools\top-site-browser-pcap.ps1 -Browser All -StartRank 1 -Count 20 -Interface 1 -FreshRun
+```
+
+The Windows collector uses fresh browser profiles, disables common background features where supported, terminates the launched browser process tree after each visit, and closes matching target TCP connections before moving to the next URL unless `-NoCloseTargetConnections` is supplied.
+
+### Ubuntu Chrome/Chromium/Firefox
+
+```bash
+sudo python3 tools/top_site_browser_pcap_ubuntu.py --browser All --start-rank 1 --count 20 --interface auto --fresh-run
+```
+
+If `dumpcap` capture permissions fail, grant capture capabilities to the installed `dumpcap` binary or run with `sudo`.
 
 ## Optional Shodan configuration
 
