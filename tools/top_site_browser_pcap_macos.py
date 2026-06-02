@@ -9,8 +9,9 @@ for later fingerprint/cleaning analysis.
 
 Examples:
   python3 top_site_browser_pcap_macos.py --list-interfaces
-  sudo python3 top_site_browser_pcap_macos.py --browser All --start-rank 1 --count 20 --interface en0 --fresh-run
-  sudo python3 top_site_browser_pcap_macos.py --browser Safari --start-rank 1 --count 20 --interface en0 --fresh-run
+  sudo python3 top_site_browser_pcap_macos.py --browser All --start-rank 1 --count 20 --fresh-run
+  sudo python3 top_site_browser_pcap_macos.py --browser Safari --start-rank 1 --count 20 --interface auto --fresh-run
+  sudo python3 top_site_browser_pcap_macos.py --browser Chrome --start-rank 1 --count 2 --capture-filter-mode tcp-ports --fresh-run
 
 Notes:
   - dumpcap on macOS usually requires root/sudo or Wireshark capture-helper setup.
@@ -166,6 +167,31 @@ def list_interfaces(dumpcap: str) -> None:
         sys.stderr.write(cp.stderr)
 
 
+def default_route_interface() -> str | None:
+    """Return the active default-route interface on macOS, e.g. en0/en1/utun."""
+    try:
+        cp = run(["/sbin/route", "-n", "get", "default"], check=False, timeout=10)
+    except Exception:
+        return None
+    text = (cp.stdout or "") + "\n" + (cp.stderr or "")
+    for line in text.splitlines():
+        line = line.strip()
+        if line.startswith("interface:"):
+            iface = line.split(":", 1)[1].strip()
+            return iface or None
+    return None
+
+
+def resolve_capture_interface(requested: str) -> str:
+    if requested != "auto":
+        return requested
+    iface = default_route_interface()
+    if not iface:
+        raise RuntimeError("Could not auto-detect the default-route interface. Run --list-interfaces and pass --interface manually.")
+    print(f"Auto-selected capture interface from default route: {iface}")
+    return iface
+
+
 def download_tranco(url: str, tmp_dir: Path) -> Path:
     tmp_dir.mkdir(parents=True, exist_ok=True)
     zip_path = tmp_dir / "top-1m.csv.zip"
@@ -230,7 +256,9 @@ def resolve_site_ips(sites: Sequence[tuple[int, str]]) -> tuple[list[dict[str, s
     return rows, sorted(ips)
 
 
-def build_capture_filter(ips: Sequence[str]) -> str:
+def build_capture_filter(ips: Sequence[str], mode: str = "target") -> str:
+    if mode == "tcp-ports":
+        return "tcp and (port 80 or port 443)"
     if not ips:
         raise RuntimeError("No target IPs resolved; refusing to capture broad traffic")
     return "tcp and (port 80 or port 443) and (" + " or ".join(f"host {ip}" for ip in sorted(ips)) + ")"
@@ -382,6 +410,45 @@ def stop_capture(proc: subprocess.Popen[str] | None) -> None:
         log.close()
 
 
+def pcap_packet_count(pcap_path: Path) -> int | None:
+    capinfos = find_program([
+        "/Applications/Wireshark.app/Contents/MacOS/capinfos",
+        "/usr/local/bin/capinfos",
+        "/opt/homebrew/bin/capinfos",
+        "capinfos",
+    ])
+    if not capinfos or not pcap_path.exists():
+        return None
+    cp = subprocess.run([capinfos, "-c", str(pcap_path)], text=True, capture_output=True, check=False, timeout=30)
+    text = (cp.stdout or "") + "\n" + (cp.stderr or "")
+    match = re.search(r"Number of packets:\s*(\d+)", text)
+    if match:
+        return int(match.group(1))
+    for token in re.findall(r"\d+", text):
+        return int(token)
+    return None
+
+
+def verify_capture_not_empty(pcap_path: Path, browser_name: str) -> None:
+    size = pcap_path.stat().st_size if pcap_path.exists() else 0
+    packets = pcap_packet_count(pcap_path)
+    if packets is not None:
+        print(f"Capture summary for {browser_name}: {packets} packets, {size} bytes")
+        if packets == 0:
+            raise RuntimeError(
+                f"Capture for {browser_name} has zero packets ({pcap_path}, {size} bytes). "
+                "This usually means the wrong interface was selected or the target-IP filter missed the browser's actual destination IPs. "
+                "Retry a tiny run with --interface auto and --capture-filter-mode tcp-ports to separate interface problems from DNS/filter problems."
+            )
+        return
+    print(f"Capture summary for {browser_name}: {size} bytes (capinfos not found; packet count unavailable)")
+    if size <= 4096:
+        raise RuntimeError(
+            f"Capture for {browser_name} is only {size} bytes ({pcap_path}); treating it as empty. "
+            "Install/use Wireshark capinfos for exact packet counts, and retry with --interface auto --capture-filter-mode tcp-ports."
+        )
+
+
 def is_browser_complete(browser_name: str, expected_visits: int, visit_rows: list[dict[str, str]], pcap_rows: list[dict[str, str]]) -> bool:
     visits = [r for r in visit_rows if r.get("browser") == browser_name]
     manifests = [r for r in pcap_rows if r.get("browser") == browser_name]
@@ -409,7 +476,7 @@ def main() -> int:
     parser.add_argument("--browser", choices=["Chrome", "Safari", "Edge", "All"], default="All")
     parser.add_argument("--start-rank", type=int, default=1)
     parser.add_argument("--count", type=int, default=20)
-    parser.add_argument("--interface", default="en0")
+    parser.add_argument("--interface", default="auto", help="Capture interface name/number, or 'auto' to use the macOS default-route interface")
     parser.add_argument("--list-interfaces", action="store_true")
     parser.add_argument("--output-dir", type=Path, default=DEFAULT_OUTPUT)
     parser.add_argument("--fresh-run", action="store_true")
@@ -418,6 +485,7 @@ def main() -> int:
     parser.add_argument("--tranco-url", default=TRANC0_URL)
     parser.add_argument("--allow-missing-browsers", action="store_true")
     parser.add_argument("--overwrite-browser", action="append", choices=["Chrome", "Safari", "Edge"], default=[])
+    parser.add_argument("--capture-filter-mode", choices=["target", "tcp-ports"], default="target", help="target = TCP/80+443 to resolved site IPs; tcp-ports = broader TCP/80+443 diagnostic capture")
     parser.add_argument("--no-close-target-connections", action="store_true", help="Do not run the best-effort target TCP socket cleanup after each visit")
     parser.add_argument("--connection-settle-seconds", type=float, default=2.0, help="Seconds to wait after closing target sockets between visits")
     parser.add_argument("--dry-run", action="store_true", help="Resolve targets and write sidecars, but do not capture or launch browsers")
@@ -432,6 +500,7 @@ def main() -> int:
     if args.list_interfaces:
         list_interfaces(dumpcap)
         return 0
+    args.interface = resolve_capture_interface(args.interface)
 
     browsers = discover_browsers(args.browser, allow_missing=args.allow_missing_browsers)
     if not browsers:
@@ -459,8 +528,9 @@ def main() -> int:
         print(f"Resolving rank {range_token} target IPs...")
         resolved_rows, target_ips = resolve_site_ips(sites)
         write_csv(run_dir / "resolved-target-ips.csv", resolved_rows, ["rank", "site_domain", "resolved_name", "record_type", "ip"])
-        capture_filter = build_capture_filter(target_ips)
+        capture_filter = build_capture_filter(target_ips, args.capture_filter_mode)
         (run_dir / "capture-filter.txt").write_text(capture_filter + "\n", encoding="ascii")
+        (run_dir / "capture-filter-mode.txt").write_text(args.capture_filter_mode + "\n", encoding="ascii")
 
     profiles_root = run_dir / "browser-profiles"
     profiles_root.mkdir(parents=True, exist_ok=True)
@@ -480,10 +550,11 @@ def main() -> int:
             "browser_version_token": version_token,
             "site_range": range_token,
             "capture_interface": args.interface,
+            "capture_filter_mode": args.capture_filter_mode,
             "capture_filter": capture_filter,
             "profile_note": "Safari uses existing app profile; Chrome/Edge use temporary user-data dirs" if b["name"] == "Safari" else "temporary user-data dir per visit",
         })
-    write_csv(run_dir / "run-metadata.csv", metadata_rows, ["os_version_token", "browser", "browser_app_path", "browser_path", "browser_version_token", "site_range", "capture_interface", "capture_filter", "profile_note"])
+    write_csv(run_dir / "run-metadata.csv", metadata_rows, ["os_version_token", "browser", "browser_app_path", "browser_path", "browser_version_token", "site_range", "capture_interface", "capture_filter_mode", "capture_filter", "profile_note"])
 
     visit_path = run_dir / "visit-log.csv"
     manifest_path = run_dir / "pcap-files.csv"
@@ -539,6 +610,7 @@ def main() -> int:
             stop_capture(cap)
             if name == "Safari":
                 quit_safari()
+        verify_capture_not_empty(pcap_path, name)
         end_utc = utc_now()
         for row in pcap_rows:
             if row.get("browser") == name and row.get("pcap_path") == str(pcap_path):
