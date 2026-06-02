@@ -270,6 +270,46 @@ def quit_safari() -> None:
     subprocess.run(["/usr/bin/pkill", "-x", "Safari"], text=True, capture_output=True, check=False, timeout=10)
 
 
+def close_target_connections(browser_name: str, target_ips: Sequence[str], settle_seconds: float = 2.0) -> None:
+    """Best-effort cleanup of target TCP/80+443 sockets after each visit on macOS."""
+    if not target_ips:
+        time.sleep(settle_seconds)
+        return
+    allowed = {
+        "Chrome": ("Google Chrome", "Google Chrome Helper", "Chrome"),
+        "Edge": ("Microsoft Edge", "Microsoft Edge Helper", "Edge"),
+        "Safari": ("Safari", "com.apple.WebKit", "WebKit"),
+    }.get(browser_name, ())
+    if not allowed:
+        time.sleep(settle_seconds)
+        return
+    proc = subprocess.run(["/usr/sbin/lsof", "-nP", "-iTCP", "-sTCP:ESTABLISHED"], text=True, capture_output=True, check=False, timeout=10)
+    pids: set[int] = set()
+    ip_set = set(target_ips)
+    for line in proc.stdout.splitlines()[1:]:
+        parts = line.split()
+        if len(parts) < 9:
+            continue
+        command, pid_text = parts[0], parts[1]
+        collapsed = command.replace(" ", "")
+        if not any(prefix.replace(" ", "") in collapsed for prefix in allowed):
+            continue
+        endpoint = parts[-2] if parts[-1].startswith("(") else parts[-1]
+        if not (endpoint.endswith(":80") or endpoint.endswith(":443")):
+            continue
+        if any(ip in endpoint for ip in ip_set):
+            try:
+                pids.add(int(pid_text))
+            except ValueError:
+                pass
+    for pid in pids:
+        try:
+            os.kill(pid, signal.SIGTERM)
+        except Exception:
+            pass
+    time.sleep(settle_seconds)
+
+
 def browser_args(browser: dict[str, str], url: str, profile_dir: Path) -> list[str]:
     name = browser["name"]
     if name in {"Chrome", "Edge"}:
@@ -378,6 +418,8 @@ def main() -> int:
     parser.add_argument("--tranco-url", default=TRANC0_URL)
     parser.add_argument("--allow-missing-browsers", action="store_true")
     parser.add_argument("--overwrite-browser", action="append", choices=["Chrome", "Safari", "Edge"], default=[])
+    parser.add_argument("--no-close-target-connections", action="store_true", help="Do not run the best-effort target TCP socket cleanup after each visit")
+    parser.add_argument("--connection-settle-seconds", type=float, default=2.0, help="Seconds to wait after closing target sockets between visits")
     parser.add_argument("--dry-run", action="store_true", help="Resolve targets and write sidecars, but do not capture or launch browsers")
     args = parser.parse_args()
 
@@ -487,6 +529,8 @@ def main() -> int:
                     started = utc_now()
                     print(f"{name} rank {rank}: {url}")
                     visit_url(b, url, profile_root, args.page_seconds, args.between_seconds, logs_root)
+                    if not args.no_close_target_connections:
+                        close_target_connections(name, target_ips, args.connection_settle_seconds)
                     ended = utc_now()
                     visit_rows.append({"browser": name, "rank": str(rank), "domain": domain, "scheme": scheme, "url": url, "pcap_path": str(pcap_path), "start_utc": started, "end_utc": ended})
                     write_csv(visit_path, visit_rows, ["browser", "rank", "domain", "scheme", "url", "pcap_path", "start_utc", "end_utc"])
