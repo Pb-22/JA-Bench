@@ -150,48 +150,6 @@ Open:
 - <http://localhost:7008>
 
 
-## Browser PCAP collection helpers
-
-The `tools/` directory includes cross-platform helpers for collecting one PCAPNG per browser over a deterministic Tranco rank range. The collectors resolve each target domain and `www.<domain>` first, then use a TCP/80+443 target-IP BPF filter so captures stay focused on the selected sites.
-
-### macOS Chrome, Safari, and Edge
-
-Install Wireshark so `dumpcap` is available, then run:
-
-```bash
-sudo python3 tools/top_site_browser_pcap_macos.py --browser All --start-rank 1 --count 20 --fresh-run
-```
-
-The macOS collector defaults to `--interface auto`. Auto mode performs a short live target probe with the same target-IP capture filter and selects the interface that sees the matching browser traffic. On systems with VPN, proxy, or security-client tunnels, this commonly selects an inner `utun*` interface rather than the default physical interface.
-
-Useful macOS checks and overrides:
-
-```bash
-python3 tools/top_site_browser_pcap_macos.py --list-interfaces
-sudo python3 tools/top_site_browser_pcap_macos.py --browser All --start-rank 1 --count 20 --interface utun4 --fresh-run
-```
-
-Use `--capture-filter-mode tcp-ports` only for diagnostics. The default `target` mode is the recommended corpus mode.
-
-### Windows Chrome, Firefox, and Edge
-
-Install Wireshark/Npcap, list interfaces, then run the selected capture interface:
-
-```powershell
-powershell.exe -ExecutionPolicy Bypass -File .\tools\top-site-browser-pcap.ps1 -ListInterfaces
-powershell.exe -ExecutionPolicy Bypass -File .\tools\top-site-browser-pcap.ps1 -Browser All -StartRank 1 -Count 20 -Interface 1 -FreshRun
-```
-
-The Windows collector uses fresh browser profiles, disables common background features where supported, terminates the launched browser process tree after each visit, and closes matching target TCP connections before moving to the next URL unless `-NoCloseTargetConnections` is supplied.
-
-### Ubuntu Chrome/Chromium/Firefox
-
-```bash
-sudo python3 tools/top_site_browser_pcap_ubuntu.py --browser All --start-rank 1 --count 20 --interface auto --fresh-run
-```
-
-If `dumpcap` capture permissions fail, grant capture capabilities to the installed `dumpcap` binary or run with `sudo`.
-
 ## Optional Shodan configuration
 
 If you want Shodan enrichment:
