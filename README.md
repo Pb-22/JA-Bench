@@ -54,7 +54,8 @@ The export drawer is the last step. It lets you rename the output, choose `CSV`,
   - `HASSH`
 - Run an offline Zeek pass for each uploaded capture
 - Show field-level breakdowns, conclusions, and citations for each artifact
-- Compare artifacts against bundled historical reference data and local analyst-curated entries
+- Compare artifacts against bundled reference data and local analyst-curated entries
+- Show exact and partial matches for JA-family artifacts when reference rows share matching sections
 - Save analyst-curated reference rows directly from packet artifacts
 - Run optional active JARM against a destination domain from packet context
 - Save JARM fingerprints with analyst notes
@@ -99,6 +100,23 @@ Most fingerprint tools stop at extraction. JA-Bench is meant to be the place whe
 - compare it to known local history
 - add analyst knowledge that is not in the original PCAP
 - keep the saved data searchable and exportable
+
+## Reference matching
+
+JA-Bench compares packet artifacts against the local reference fingerprint table. Bundled reference data is loaded into SQLite the first time the container initializes a new database. Analyst-saved hashes use the same reference table, so future PCAP uploads can match both bundled references and local saved entries.
+
+Reference matches can be exact or partial:
+
+- `JA4` partial matches compare the JA4 sections in order
+- `JA4H` partial matches require the request shape and header sections to align
+- `JA4T` partial matches require more than one TCP stack section to align
+
+The bundled reference data includes:
+
+- a historical JA4+ starter dataset
+- high confidence browser fingerprint candidates for Windows, Ubuntu, and macOS browser captures
+
+The high confidence browser set is reference metadata only. It does not import the source captures into the packet, flow, or sample tables.
 
 ## Optional enrichment
 

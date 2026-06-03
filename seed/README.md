@@ -2,9 +2,10 @@
 
 This directory contains optional bundled starter reference data that JA-Bench can import into SQLite on first startup.
 
-Current bundled seed set:
+Current bundled seed sets:
 
-- `reference_ja4plus_db.csv`
+- `reference_ja4plus_db.csv`: historical starter reference rows
+- `high_confidence_browser_fingerprints.csv`: curated high confidence browser fingerprint candidates
 
 Behavior:
 

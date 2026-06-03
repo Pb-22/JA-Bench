@@ -19,3 +19,11 @@ data/cache/*
 data/db/*
 !data/db/.gitkeep
 config/keys.env
+data/received-pcaps/
+data/ubuntu-browser-pcaps/
+data/ubuntu-capture-test/
+data/cross-os-browser-analysis/
+data/macos-browser-analysis/
+data/windows11-analysis/
+reports/
+.venv-pcap-tools/

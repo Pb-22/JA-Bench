@@ -15,3 +15,11 @@ data/cache/*
 data/db/*
 !data/db/.gitkeep
 data/zeek/
+data/received-pcaps/
+data/ubuntu-browser-pcaps/
+data/ubuntu-capture-test/
+data/cross-os-browser-analysis/
+data/macos-browser-analysis/
+data/windows11-analysis/
+reports/
+.venv-pcap-tools/
